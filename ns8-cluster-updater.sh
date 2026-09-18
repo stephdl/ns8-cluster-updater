@@ -82,14 +82,39 @@ dump_json() {
     printf '%s: %s\n' "$1" "$2" >>"$LOGFILE"
 }
 
+api_cli_silent() {
+    # api_cli_silent <cluster-action> [json_data] -- same contract as
+    # `api-cli run <action> --data <json>` (stdout: JSON output, exit code:
+    # task exit code), but submits the task with extra.isNotificationHidden
+    # so it doesn't pop a toast in every admin's cluster-admin UI. api-cli
+    # itself hardcodes isNotificationHidden to false with no CLI flag to
+    # override it, so this calls the underlying agent.tasks Python API
+    # directly instead.
+    local action="$1"
+    # Match api-cli's own default: no data means JSON null, not "{}"
+    # (some actions, e.g. list-updates, reject an object as input).
+    local data="${2:-null}"
+    runagent python3 -c '
+import sys, json
+import agent, agent.tasks
+action, data = sys.argv[1], json.loads(sys.argv[2])
+extra = {"title": f"cluster/{action}", "description": "ns8-cluster-updater", "isNotificationHidden": True}
+response = agent.tasks.run("cluster", action, data, extra=extra, endpoint="redis://cluster-leader")
+if response["exit_code"] != 0:
+    print(response.get("error", ""), file=sys.stderr, end="")
+print(json.dumps(response["output"]))
+sys.exit(response["exit_code"])
+' "$action" "$data"
+}
+
 # --- version snapshot / diff helpers -----------------------------------
 
 snapshot_core_modules() {
-    api-cli run list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update}]'
+    api_cli_silent list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update}]'
 }
 
 snapshot_installed_modules() {
-    api-cli run list-installed-modules 2>>"$LOGFILE" | jq -c '[.[] | .[] | {id, version}]'
+    api_cli_silent list-installed-modules 2>>"$LOGFILE" | jq -c '[.[] | .[] | {id, version}]'
 }
 
 any_update_pending() {
@@ -178,13 +203,13 @@ os_update_local() {
 export -f os_update_local
 
 [ "$(id -u)" -eq 0 ] || die "must run as root"
-command -v api-cli >/dev/null 2>&1 || die "api-cli not found, not an NS8 node"
+command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 
 log INFO "===== run start ====="
 log INFO "log file: $LOGFILE"
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
 
-STATUS=$(api-cli run get-cluster-status 2>>"$LOGFILE") || die "get-cluster-status failed"
+STATUS=$(api_cli_silent get-cluster-status 2>>"$LOGFILE") || die "get-cluster-status failed"
 dump_json "get-cluster-status" "$STATUS"
 IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned invalid data"
 [ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
@@ -227,9 +252,9 @@ if [ "$DO_CORE" = yes ]; then
     if any_update_pending "$CORE_BEFORE"; then
         NODE_IDS=$(jq -c '[.nodes[].id]' <<<"$STATUS") || die "failed to compute node list"
         log INFO "updating core on nodes: $NODE_IDS"
-        run_step "update-core" api-cli run update-core --data "{\"nodes\":$NODE_IDS}" \
+        run_step "update-core" api_cli_silent update-core "{\"nodes\":$NODE_IDS}" \
             || die "core update failed, check $LOGFILE"
-        run_step "verify cluster status after core update" api-cli run get-cluster-status \
+        run_step "verify cluster status after core update" api_cli_silent get-cluster-status \
             || die "cluster not responsive after core update"
         CORE_AFTER=$(snapshot_core_modules) || die "failed to fetch core modules status after update, check $LOGFILE"
         log_version_diff "core components" "$CORE_BEFORE" "$CORE_AFTER"
@@ -239,16 +264,16 @@ if [ "$DO_CORE" = yes ]; then
 fi
 
 if [ "$DO_MODULES" = yes ]; then
-    PENDING=$(api-cli run list-updates 2>>"$LOGFILE") || die "list-updates failed, check $LOGFILE"
+    PENDING=$(api_cli_silent list-updates 2>>"$LOGFILE") || die "list-updates failed, check $LOGFILE"
     dump_json "list-updates (before)" "$PENDING"
     PENDING_COUNT=$(jq 'length' <<<"$PENDING") || die "list-updates returned invalid data"
     if [ "$PENDING_COUNT" -gt 0 ]; then
         MODULES_BEFORE=$(snapshot_installed_modules) || die "failed to fetch installed modules, check $LOGFILE"
-        run_step "update-modules" api-cli run update-modules --data '{}' \
+        run_step "update-modules" api_cli_silent update-modules '{}' \
             || die "modules update failed, check $LOGFILE"
         MODULES_AFTER=$(snapshot_installed_modules) || die "failed to fetch installed modules after update, check $LOGFILE"
         log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
-        REMAINING=$(api-cli run list-updates 2>>"$LOGFILE") || die "list-updates failed after update-modules, check $LOGFILE"
+        REMAINING=$(api_cli_silent list-updates 2>>"$LOGFILE") || die "list-updates failed after update-modules, check $LOGFILE"
         dump_json "list-updates (after)" "$REMAINING"
         REMAINING_COUNT=$(jq 'length' <<<"$REMAINING") || die "list-updates returned invalid data"
         if [ "$REMAINING_COUNT" -eq 0 ]; then
