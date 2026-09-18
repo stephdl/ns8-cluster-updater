@@ -110,11 +110,11 @@ sys.exit(response["exit_code"])
 # --- version snapshot / diff helpers -----------------------------------
 
 snapshot_core_modules() {
-    api_cli_silent list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update}]'
+    api_cli_silent list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
 }
 
 snapshot_installed_modules() {
-    api_cli_silent list-installed-modules 2>>"$LOGFILE" | jq -c '[.[] | .[] | {id, version}]'
+    api_cli_silent list-installed-modules 2>>"$LOGFILE" | jq -c '[.[] | .[] | {id, version, node}]'
 }
 
 any_update_pending() {
@@ -128,10 +128,10 @@ log_version_diff() {
     local diff_lines
     diff_lines=$(jq -n -r --argjson before "$before" --argjson after "$after" '
         ($before | map({(.id): .version}) | add // {}) as $b |
-        ($after  | map({(.id): .version}) | add // {}) as $a |
+        ($after  | map({(.id): {version, node}}) | add // {}) as $a |
         $a | to_entries[]
-        | select($b[.key] != .value)
-        | "\(.key): \($b[.key] // "new") -> \(.value)"
+        | select($b[.key] != .value.version)
+        | "\(.key) (node \(.value.node // "?")): \($b[.key] // "new") -> \(.value.version)"
     ')
     if [ -z "$diff_lines" ]; then
         log INFO "$label: no version change"
