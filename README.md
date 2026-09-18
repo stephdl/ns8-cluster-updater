@@ -121,8 +121,27 @@ Run it once now, without waiting for the timer:
 systemctl start ns8-cluster-updater.service
 ```
 
-The shipped `.service` always runs `--all`; edit `ExecStart` in
-`/etc/systemd/system/ns8-cluster-updater.service` to change the flags.
+The shipped `.service` always runs `--all`. Don't edit
+`ns8-cluster-updater.service` directly: a later `curl` reinstall overwrites
+it, same reason as the timer below. Use a drop-in instead:
+
+```
+systemctl edit ns8-cluster-updater.service
+```
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/local/sbin/ns8-cluster-updater.sh --core --modules
+```
+
+The empty `ExecStart=` first clears the shipped `--all` command; like
+`OnCalendar`, systemd appends `ExecStart=` lines instead of replacing them.
+Reload after saving:
+
+```
+systemctl daemon-reload
+```
 
 ### Changing the schedule
 
