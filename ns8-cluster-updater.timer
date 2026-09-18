@@ -1,0 +1,13 @@
+[Unit]
+Description=NS8 cluster update window
+
+[Timer]
+# Same days/window as NS8's own apply-updates.timer: an admin is usually
+# around the same day or next if something breaks, unlike a weekend run.
+OnCalendar=Tue..Fri 00:00:00
+RandomizedDelaySec=6h
+FixedRandomDelay=true
+Persistent=true
+
+[Install]
+WantedBy=timers.target

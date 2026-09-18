@@ -23,7 +23,14 @@ API directly for this. Failures still show up normally.
 ```
 curl -o /usr/local/sbin/ns8-cluster-updater.sh https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.sh
 chmod +x /usr/local/sbin/ns8-cluster-updater.sh
-curl -o /etc/logrotate.d/ns8-cluster-updater https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/logrotate.d/ns8-cluster-updater
+```
+
+For the systemd timer (see Scheduling below), also grab the unit files:
+
+```
+curl -o /etc/systemd/system/ns8-cluster-updater.service https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.service
+curl -o /etc/systemd/system/ns8-cluster-updater.timer https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.timer
+systemctl daemon-reload
 ```
 
 ## Requirements
@@ -70,7 +77,7 @@ config file conflict, dpkg keeps your local version instead of prompting or
 overwriting it. Fully non-interactive, no manual step needed.
 
 dnf/apt output streams live to the terminal as it runs (a kernel upgrade can
-take several minutes), and is also appended to the log file.
+take several minutes).
 
 ### Reboot detection
 
@@ -85,40 +92,83 @@ needs one:
 
 ## Logging
 
-Everything appends to one file, `/var/log/ns8-full-update.log`, timestamped
-per line. Logrotate config: see Install above.
+Every message goes to stderr with a systemd journal priority prefix
+(`<3>` error, `<4>` warning, `<5>` notice, `<6>` info — same convention
+NS8 core itself uses in `agent/__init__.py`'s `SD_*` constants). Run
+interactively, they print straight to the terminal; run under the shipped
+service, journald picks up the prefix and stores the right severity.
 
-## Example: cron
+## Scheduling
 
-These examples are for `crontab -e` (root's own crontab, no user field). For
-`/etc/crontab` or `/etc/cron.d/*` instead, add `root` right after the 5 time
-fields.
-
-Every night at 2am:
-
-```cron
-0 2 * * * /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+```
+systemctl enable --now ns8-cluster-updater.timer
 ```
 
-Tuesday to Friday only, same days as NS8's own automatic updates: an admin
-is usually around the same day or next if something breaks, unlike a
-weekend or Monday-morning run:
+`ns8-cluster-updater.timer` fires Tuesday to Friday at 00:00, with a 6h
+randomized delay (`FixedRandomDelay=true`, so the offset is stable per
+host), same window as NS8's own `apply-updates.timer`. `Persistent=true`
+catches up on next boot if the host was off at the scheduled time.
 
-```cron
-0 0 * * 2-5 /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+Check a run:
+
+```
+journalctl -u ns8-cluster-updater.service -e
 ```
 
-Same, with a random delay up to 6h, matching NS8's own `RandomizedDelaySec=6h`:
+Run it once now, without waiting for the timer:
 
-```cron
-0 0 * * 2-5 sleep $((RANDOM % 21600)) && /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+```
+systemctl start ns8-cluster-updater.service
 ```
 
-Once a week, Sunday (`/etc/cron.weekly` default day) — not recommended, nobody's
-around to fix a broken update before Monday:
+The shipped `.service` always runs `--all`; edit `ExecStart` in
+`/etc/systemd/system/ns8-cluster-updater.service` to change the flags.
 
-```cron
-0 3 * * 0 /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+### Changing the schedule
+
+Don't edit `ns8-cluster-updater.timer` directly: a later `curl` reinstall
+overwrites it. Use a drop-in instead:
+
+```
+systemctl edit ns8-cluster-updater.timer
+```
+
+This opens an editor on an override file. Add only the keys you want to
+change, under `[Timer]`:
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=Sun 03:00:00
+```
+
+The empty `OnCalendar=` first clears the shipped `Tue..Fri 00:00:00` value;
+systemd appends settings instead of replacing them, so skipping that line
+would leave both active. Some other schedules:
+
+```ini
+# Every day at 1am
+OnCalendar=*-*-* 01:00:00
+
+# Twice a week, Monday and Thursday at 22:00
+OnCalendar=Mon,Thu 22:00:00
+
+# First day of the month, 4am
+OnCalendar=*-*-01 04:00:00
+```
+
+To change the randomized delay or drop it entirely:
+
+```ini
+[Timer]
+RandomizedDelaySec=1h
+```
+
+After saving, reload and check the next run time:
+
+```
+systemctl daemon-reload
+systemctl list-timers ns8-cluster-updater.timer
 ```
 
 ## Known limitations
