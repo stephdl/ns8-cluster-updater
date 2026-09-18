@@ -38,7 +38,7 @@ ns8-cluster-updater.sh [--core] [--modules] [--os-safe|--os-full] [--all] [-h|--
 | `--modules`   | Update all NS8 app instances, on all nodes, only if at least one has a pending update. |
 | `--os-safe`   | Update OS packages, restricted to official distro repos, no package removal/addition. |
 | `--os-full`   | Update OS packages, all enabled repos, full dependency resolution. Can install a new kernel. |
-| `--all`       | Shortcut for `--core --modules --os-safe`. |
+| `--all`       | Shortcut for `--os-safe --core --modules`, run in that order (same as NS8's own automatic updates). |
 | `-h`, `--help`| Show usage and exit. |
 
 Running the script with no option prints the usage and does nothing (safe by

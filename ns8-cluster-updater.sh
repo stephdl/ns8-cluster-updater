@@ -22,7 +22,8 @@ Usage: ns8-full-update.sh [--core] [--modules] [--os-safe|--os-full] [--all] [-h
                apt: sources.list only, plain upgrade)
   --os-full    update OS packages, all enabled repos, full dependency
                resolution (dnf: all repos, e.g. EPEL; apt: dist-upgrade)
-  --all        shortcut for --core --modules --os-safe
+  --all        shortcut for --os-safe --core --modules (same order NS8's own
+               automatic updates use: OS, then core, then apps)
   -h, --help   show this help and exit
 
 No flag given: print this help, do nothing.
@@ -42,7 +43,7 @@ for arg in "$@"; do
         --modules) DO_MODULES=yes ;;
         --os-safe) DO_OS=yes; OS_MODE=safe ;;
         --os-full) DO_OS=yes; OS_MODE=full ;;
-        --all) DO_CORE=yes; DO_MODULES=yes; DO_OS=yes; OS_MODE=safe ;;
+        --all) DO_OS=yes; OS_MODE=safe; DO_CORE=yes; DO_MODULES=yes ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage; exit 1 ;;
     esac
@@ -74,6 +75,11 @@ run_step() {
 die() {
     log FATAL "$1"
     exit 1
+}
+
+dump_json() {
+    # dump_json "label" "$JSON" -- writes a labelled raw dump to the log file
+    printf '%s: %s\n' "$1" "$2" >>"$LOGFILE"
 }
 
 # --- version snapshot / diff helpers -----------------------------------
@@ -179,49 +185,13 @@ log INFO "log file: $LOGFILE"
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
 
 STATUS=$(api-cli run get-cluster-status 2>>"$LOGFILE") || die "get-cluster-status failed"
-echo "$STATUS" >>"$LOGFILE"
-IS_LEADER=$(echo "$STATUS" | jq -r '.leader')
+dump_json "get-cluster-status" "$STATUS"
+IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned invalid data"
 [ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
 log OK "running on cluster leader"
 
-if [ "$DO_CORE" = yes ]; then
-    CORE_BEFORE=$(snapshot_core_modules)
-    if any_update_pending "$CORE_BEFORE"; then
-        NODE_IDS=$(echo "$STATUS" | jq -c '[.nodes[].id]')
-        log INFO "updating core on nodes: $NODE_IDS"
-        run_step "update-core" api-cli run update-core --data "{\"nodes\":$NODE_IDS}" \
-            || die "core update failed, check $LOGFILE"
-        run_step "verify cluster status after core update" api-cli run get-cluster-status \
-            || die "cluster not responsive after core update"
-        CORE_AFTER=$(snapshot_core_modules)
-        log_version_diff "core components" "$CORE_BEFORE" "$CORE_AFTER"
-    else
-        log INFO "no core update available, skipping update-core"
-    fi
-fi
-
-if [ "$DO_MODULES" = yes ]; then
-    PENDING=$(api-cli run list-updates 2>>"$LOGFILE")
-    echo "$PENDING" >>"$LOGFILE"
-    PENDING_COUNT=$(echo "$PENDING" | jq 'length')
-    if [ "$PENDING_COUNT" -gt 0 ]; then
-        MODULES_BEFORE=$(snapshot_installed_modules)
-        run_step "update-modules" api-cli run update-modules --data '{}' \
-            || die "modules update failed, check $LOGFILE"
-        MODULES_AFTER=$(snapshot_installed_modules)
-        log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
-        REMAINING=$(api-cli run list-updates 2>>"$LOGFILE")
-        echo "$REMAINING" >>"$LOGFILE"
-        REMAINING_COUNT=$(echo "$REMAINING" | jq 'length')
-        if [ "$REMAINING_COUNT" -eq 0 ]; then
-            log OK "no pending app updates left"
-        else
-            log WARN "still $REMAINING_COUNT app update(s) pending after update-modules"
-        fi
-    else
-        log INFO "no app update available, skipping update-modules"
-    fi
-fi
+# Order matches NS8's own automatic updates (cluster/bin/apply-updates):
+# OS packages first, then core, then apps.
 
 if [ "$DO_OS" = yes ]; then
     ANY_REBOOT=no
@@ -236,7 +206,7 @@ if [ "$DO_OS" = yes ]; then
             [ -n "$VPNIP" ] || { log FAIL "no vpn ip for node $NID"; continue; }
             log STEP "OS update on node $NID (remote, $HOSTNAME, $VPNIP)"
             OUT=$(ssh -n -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@$VPNIP" \
-                "$(declare -f os_update_local); os_update_local $OS_MODE" 2>&1)
+                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1)
             RC=$?
         fi
         printf '%s\n' "$OUT" >>"$LOGFILE"
@@ -250,6 +220,45 @@ if [ "$DO_OS" = yes ]; then
 
     log INFO "reboot needed on at least one node: $ANY_REBOOT"
     [ "$ANY_REBOOT" = yes ] && log WARN "reboot manually the affected node(s), script does not reboot"
+fi
+
+if [ "$DO_CORE" = yes ]; then
+    CORE_BEFORE=$(snapshot_core_modules) || die "failed to fetch core modules status, check $LOGFILE"
+    if any_update_pending "$CORE_BEFORE"; then
+        NODE_IDS=$(jq -c '[.nodes[].id]' <<<"$STATUS") || die "failed to compute node list"
+        log INFO "updating core on nodes: $NODE_IDS"
+        run_step "update-core" api-cli run update-core --data "{\"nodes\":$NODE_IDS}" \
+            || die "core update failed, check $LOGFILE"
+        run_step "verify cluster status after core update" api-cli run get-cluster-status \
+            || die "cluster not responsive after core update"
+        CORE_AFTER=$(snapshot_core_modules) || die "failed to fetch core modules status after update, check $LOGFILE"
+        log_version_diff "core components" "$CORE_BEFORE" "$CORE_AFTER"
+    else
+        log INFO "no core update available, skipping update-core"
+    fi
+fi
+
+if [ "$DO_MODULES" = yes ]; then
+    PENDING=$(api-cli run list-updates 2>>"$LOGFILE") || die "list-updates failed, check $LOGFILE"
+    dump_json "list-updates (before)" "$PENDING"
+    PENDING_COUNT=$(jq 'length' <<<"$PENDING") || die "list-updates returned invalid data"
+    if [ "$PENDING_COUNT" -gt 0 ]; then
+        MODULES_BEFORE=$(snapshot_installed_modules) || die "failed to fetch installed modules, check $LOGFILE"
+        run_step "update-modules" api-cli run update-modules --data '{}' \
+            || die "modules update failed, check $LOGFILE"
+        MODULES_AFTER=$(snapshot_installed_modules) || die "failed to fetch installed modules after update, check $LOGFILE"
+        log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
+        REMAINING=$(api-cli run list-updates 2>>"$LOGFILE") || die "list-updates failed after update-modules, check $LOGFILE"
+        dump_json "list-updates (after)" "$REMAINING"
+        REMAINING_COUNT=$(jq 'length' <<<"$REMAINING") || die "list-updates returned invalid data"
+        if [ "$REMAINING_COUNT" -eq 0 ]; then
+            log OK "no pending app updates left"
+        else
+            log WARN "still $REMAINING_COUNT app update(s) pending after update-modules"
+        fi
+    else
+        log INFO "no app update available, skipping update-modules"
+    fi
 fi
 
 log OK "requested steps done, full log: $LOGFILE"
