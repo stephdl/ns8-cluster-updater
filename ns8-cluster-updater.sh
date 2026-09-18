@@ -2,7 +2,12 @@
 
 set -uo pipefail
 
-LOGFILE="/var/log/ns8-full-update.log"
+# systemd journal priority prefixes (see systemd.journal-fields(7) and
+# agent/__init__.py's SD_* constants), same convention NS8 core itself uses.
+SD_ERR="<3>"
+SD_WARNING="<4>"
+SD_NOTICE="<5>"
+SD_INFO="<6>"
 
 DO_CORE=no
 DO_MODULES=no
@@ -26,7 +31,9 @@ Usage: ns8-full-update.sh [--core] [--modules] [--os-safe|--os-full] [--all] [-h
 
 No flag given: print this help, do nothing.
 Must run as root on the cluster leader.
-Log file: /var/log/ns8-full-update.log (single file, append only, safe for logrotate)
+Logs go to stderr with systemd priority prefixes; under the shipped
+ns8-cluster-updater.service, journalctl -u ns8-cluster-updater.service
+shows them. Run interactively, they print straight to the terminal.
 EOF
 }
 
@@ -47,10 +54,15 @@ for arg in "$@"; do
     esac
 done
 
-touch "$LOGFILE"
-
 log() {
-    printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2" | tee -a "$LOGFILE"
+    local level="$1" msg="$2" prefix
+    case "$level" in
+        FATAL|FAIL) prefix="$SD_ERR" ;;
+        WARN) prefix="$SD_WARNING" ;;
+        STEP|OK) prefix="$SD_NOTICE" ;;
+        *) prefix="$SD_INFO" ;;
+    esac
+    printf '%s%s: %s\n' "$prefix" "$level" "$msg" >&2
 }
 
 run_step() {
@@ -58,12 +70,12 @@ run_step() {
     log STEP "start: $label"
     local out
     if out=$("$@" 2>&1); then
-        printf '%s\n' "$out" >>"$LOGFILE"
+        [ -n "$out" ] && printf '%s\n' "$out" >&2
         log OK "$label"
         return 0
     else
         local rc=$?
-        printf '%s\n' "$out" >>"$LOGFILE"
+        [ -n "$out" ] && printf '%s\n' "$out" >&2
         log FAIL "$label (exit $rc)"
         return "$rc"
     fi
@@ -75,7 +87,7 @@ die() {
 }
 
 dump_json() {
-    printf '%s: %s\n' "$1" "$2" >>"$LOGFILE"
+    log INFO "$1: $2"
 }
 
 api_cli_silent() {
@@ -100,11 +112,11 @@ sys.exit(response["exit_code"])
 }
 
 snapshot_core_modules() {
-    api_cli_silent list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
+    api_cli_silent list-core-modules | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
 }
 
 snapshot_installed_modules() {
-    api_cli_silent list-installed-modules 2>>"$LOGFILE" | jq -c '[.[] | .[] | {id, version, node}]'
+    api_cli_silent list-installed-modules | jq -c '[.[] | .[] | {id, version, node}]'
 }
 
 any_update_pending() {
@@ -125,8 +137,7 @@ log_version_diff() {
         log INFO "$label: no version change"
     else
         log INFO "$label: version changes:"
-        printf '%s\n' "$diff_lines" >>"$LOGFILE"
-        printf '%s\n' "$diff_lines"
+        printf '%s\n' "$diff_lines" >&2
     fi
 }
 
@@ -193,10 +204,9 @@ export -f os_update_local
 command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 
 log INFO "===== run start ====="
-log INFO "log file: $LOGFILE"
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
 
-STATUS=$(api_cli_silent get-cluster-status 2>>"$LOGFILE") || die "get-cluster-status failed"
+STATUS=$(api_cli_silent get-cluster-status) || die "get-cluster-status failed"
 dump_json "get-cluster-status" "$STATUS"
 IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned invalid data"
 [ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
@@ -212,13 +222,13 @@ if [ "$DO_OS" = yes ]; then
         NODE_OUT=$(mktemp)
         if [ "$LOCAL" = "true" ]; then
             log STEP "OS update on node $NID (local, $HOSTNAME)"
-            os_update_local "$OS_MODE" 2>&1 | tee -a "$LOGFILE" "$NODE_OUT"
+            os_update_local "$OS_MODE" 2>&1 | tee "$NODE_OUT"
             RC=${PIPESTATUS[0]}
         else
             [ -n "$VPNIP" ] || { log FAIL "no vpn ip for node $NID"; rm -f "$NODE_OUT"; continue; }
             log STEP "OS update on node $NID (remote, $HOSTNAME, $VPNIP)"
             ssh -n -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@$VPNIP" \
-                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1 | tee -a "$LOGFILE" "$NODE_OUT"
+                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1 | tee "$NODE_OUT"
             RC=${PIPESTATUS[0]}
         fi
         if [ "$RC" -eq 0 ]; then
@@ -235,15 +245,15 @@ if [ "$DO_OS" = yes ]; then
 fi
 
 if [ "$DO_CORE" = yes ]; then
-    CORE_BEFORE=$(snapshot_core_modules) || die "failed to fetch core modules status, check $LOGFILE"
+    CORE_BEFORE=$(snapshot_core_modules) || die "failed to fetch core modules status"
     if any_update_pending "$CORE_BEFORE"; then
         NODE_IDS=$(jq -c '[.nodes[].id]' <<<"$STATUS") || die "failed to compute node list"
         log INFO "updating core on nodes: $NODE_IDS"
         run_step "update-core" api_cli_silent update-core "{\"nodes\":$NODE_IDS}" \
-            || die "core update failed, check $LOGFILE"
+            || die "core update failed"
         run_step "verify cluster status after core update" api_cli_silent get-cluster-status \
             || die "cluster not responsive after core update"
-        CORE_AFTER=$(snapshot_core_modules) || die "failed to fetch core modules status after update, check $LOGFILE"
+        CORE_AFTER=$(snapshot_core_modules) || die "failed to fetch core modules status after update"
         log_version_diff "core components" "$CORE_BEFORE" "$CORE_AFTER"
     else
         log INFO "no core update available, skipping update-core"
@@ -251,16 +261,16 @@ if [ "$DO_CORE" = yes ]; then
 fi
 
 if [ "$DO_MODULES" = yes ]; then
-    PENDING=$(api_cli_silent list-updates 2>>"$LOGFILE") || die "list-updates failed, check $LOGFILE"
+    PENDING=$(api_cli_silent list-updates) || die "list-updates failed"
     dump_json "list-updates (before)" "$PENDING"
     PENDING_COUNT=$(jq 'length' <<<"$PENDING") || die "list-updates returned invalid data"
     if [ "$PENDING_COUNT" -gt 0 ]; then
-        MODULES_BEFORE=$(snapshot_installed_modules) || die "failed to fetch installed modules, check $LOGFILE"
+        MODULES_BEFORE=$(snapshot_installed_modules) || die "failed to fetch installed modules"
         run_step "update-modules" api_cli_silent update-modules '{}' \
-            || die "modules update failed, check $LOGFILE"
-        MODULES_AFTER=$(snapshot_installed_modules) || die "failed to fetch installed modules after update, check $LOGFILE"
+            || die "modules update failed"
+        MODULES_AFTER=$(snapshot_installed_modules) || die "failed to fetch installed modules after update"
         log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
-        REMAINING=$(api_cli_silent list-updates 2>>"$LOGFILE") || die "list-updates failed after update-modules, check $LOGFILE"
+        REMAINING=$(api_cli_silent list-updates) || die "list-updates failed after update-modules"
         dump_json "list-updates (after)" "$REMAINING"
         REMAINING_COUNT=$(jq 'length' <<<"$REMAINING") || die "list-updates returned invalid data"
         if [ "$REMAINING_COUNT" -eq 0 ]; then
@@ -273,5 +283,5 @@ if [ "$DO_MODULES" = yes ]; then
     fi
 fi
 
-log OK "requested steps done, full log: $LOGFILE"
+log OK "requested steps done"
 log INFO "===== run end ====="

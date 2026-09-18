@@ -23,7 +23,14 @@ API directly for this. Failures still show up normally.
 ```
 curl -o /usr/local/sbin/ns8-cluster-updater.sh https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.sh
 chmod +x /usr/local/sbin/ns8-cluster-updater.sh
-curl -o /etc/logrotate.d/ns8-cluster-updater https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/logrotate.d/ns8-cluster-updater
+```
+
+For the systemd timer (see Scheduling below), also grab the unit files:
+
+```
+curl -o /etc/systemd/system/ns8-cluster-updater.service https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.service
+curl -o /etc/systemd/system/ns8-cluster-updater.timer https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.timer
+systemctl daemon-reload
 ```
 
 ## Requirements
@@ -70,7 +77,7 @@ config file conflict, dpkg keeps your local version instead of prompting or
 overwriting it. Fully non-interactive, no manual step needed.
 
 dnf/apt output streams live to the terminal as it runs (a kernel upgrade can
-take several minutes), and is also appended to the log file.
+take several minutes).
 
 ### Reboot detection
 
@@ -85,10 +92,41 @@ needs one:
 
 ## Logging
 
-Everything appends to one file, `/var/log/ns8-full-update.log`, timestamped
-per line. Logrotate config: see Install above.
+Every message goes to stderr with a systemd journal priority prefix
+(`<3>` error, `<4>` warning, `<5>` notice, `<6>` info — same convention
+NS8 core itself uses in `agent/__init__.py`'s `SD_*` constants). Run
+interactively, they print straight to the terminal; run under the shipped
+service, journald picks up the prefix and stores the right severity.
 
-## Example: cron
+## Scheduling
+
+### Option A: systemd timer (recommended)
+
+```
+systemctl enable --now ns8-cluster-updater.timer
+```
+
+`ns8-cluster-updater.timer` fires Tuesday to Friday at 00:00, with a 6h
+randomized delay (`FixedRandomDelay=true`, so the offset is stable per
+host), same window as NS8's own `apply-updates.timer`. `Persistent=true`
+catches up on next boot if the host was off at the scheduled time.
+
+Check a run:
+
+```
+journalctl -u ns8-cluster-updater.service -e
+```
+
+Run it once now, without waiting for the timer:
+
+```
+systemctl start ns8-cluster-updater.service
+```
+
+The shipped `.service` always runs `--all`; edit `ExecStart` in
+`/etc/systemd/system/ns8-cluster-updater.service` to change the flags.
+
+### Option B: plain cron
 
 These examples are for `crontab -e` (root's own crontab, no user field). For
 `/etc/crontab` or `/etc/cron.d/*` instead, add `root` right after the 5 time
@@ -97,7 +135,7 @@ fields.
 Every night at 2am:
 
 ```cron
-0 2 * * * /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+0 2 * * * /usr/local/sbin/ns8-cluster-updater.sh --all
 ```
 
 Tuesday to Friday only, same days as NS8's own automatic updates: an admin
@@ -105,21 +143,25 @@ is usually around the same day or next if something breaks, unlike a
 weekend or Monday-morning run:
 
 ```cron
-0 0 * * 2-5 /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+0 0 * * 2-5 /usr/local/sbin/ns8-cluster-updater.sh --all
 ```
 
 Same, with a random delay up to 6h, matching NS8's own `RandomizedDelaySec=6h`:
 
 ```cron
-0 0 * * 2-5 sleep $((RANDOM % 21600)) && /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+0 0 * * 2-5 sleep $((RANDOM % 21600)) && /usr/local/sbin/ns8-cluster-updater.sh --all
 ```
 
 Once a week, Sunday (`/etc/cron.weekly` default day) — not recommended, nobody's
 around to fix a broken update before Monday:
 
 ```cron
-0 3 * * 0 /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+0 3 * * 0 /usr/local/sbin/ns8-cluster-updater.sh --all
 ```
+
+With cron, output goes wherever cron sends it (mail to root by default,
+unless redirected); there's no journald prefix handling outside a systemd
+service.
 
 ## Known limitations
 

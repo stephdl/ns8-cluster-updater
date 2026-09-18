@@ -1,0 +1,7 @@
+[Unit]
+Description=NS8 cluster update (core, apps, OS packages)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ns8-cluster-updater.sh --all
+SyslogIdentifier=ns8-cluster-updater
