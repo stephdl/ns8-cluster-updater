@@ -1,0 +1,9 @@
+/var/log/ns8-full-update.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
