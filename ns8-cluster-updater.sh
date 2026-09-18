@@ -65,17 +65,29 @@ log() {
     printf '%s%s: %s\n' "$prefix" "$level" "$msg" >&2
 }
 
+# Prints multi-line text one log() call per line, so every physical line
+# always starts with our own controlled prefix. Without this, a line from
+# untrusted content (e.g. an app's error message) starting with "<3>" or
+# similar would be read by journald as a forged priority on its own entry.
+log_lines() {
+    local level="$1" text="$2"
+    [ -n "$text" ] || return 0
+    while IFS= read -r line; do
+        log "$level" "$line"
+    done <<<"$text"
+}
+
 run_step() {
     local label="$1"; shift
     log STEP "start: $label"
     local out
     if out=$("$@" 2>&1); then
-        [ -n "$out" ] && printf '%s\n' "$out" >&2
+        log_lines INFO "$out"
         log OK "$label"
         return 0
     else
         local rc=$?
-        [ -n "$out" ] && printf '%s\n' "$out" >&2
+        log_lines INFO "$out"
         log FAIL "$label (exit $rc)"
         return "$rc"
     fi
@@ -137,7 +149,7 @@ log_version_diff() {
         log INFO "$label: no version change"
     else
         log INFO "$label: version changes:"
-        printf '%s\n' "$diff_lines" >&2
+        log_lines INFO "$diff_lines"
     fi
 }
 
@@ -222,13 +234,13 @@ if [ "$DO_OS" = yes ]; then
         NODE_OUT=$(mktemp)
         if [ "$LOCAL" = "true" ]; then
             log STEP "OS update on node $NID (local, $HOSTNAME)"
-            os_update_local "$OS_MODE" 2>&1 | tee "$NODE_OUT"
+            os_update_local "$OS_MODE" 2>&1 | tee "$NODE_OUT" >&2
             RC=${PIPESTATUS[0]}
         else
             [ -n "$VPNIP" ] || { log FAIL "no vpn ip for node $NID"; rm -f "$NODE_OUT"; continue; }
             log STEP "OS update on node $NID (remote, $HOSTNAME, $VPNIP)"
             ssh -n -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@$VPNIP" \
-                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1 | tee "$NODE_OUT"
+                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1 | tee "$NODE_OUT" >&2
             RC=${PIPESTATUS[0]}
         fi
         if [ "$RC" -eq 0 ]; then
