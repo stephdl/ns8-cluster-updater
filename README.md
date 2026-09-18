@@ -69,6 +69,9 @@ On Debian/Ubuntu, both modes add `--force-confdef --force-confold`: on a
 config file conflict, dpkg keeps your local version instead of prompting or
 overwriting it. Fully non-interactive, no manual step needed.
 
+dnf/apt output streams live to the terminal as it runs (a kernel upgrade can
+take several minutes), and is also appended to the log file.
+
 ### Reboot detection
 
 The script never reboots. It only reports, at the end, whether any node
