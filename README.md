@@ -90,9 +90,31 @@ per line. Logrotate config: see Install above.
 
 ## Example: cron
 
+Every night at 2am:
+
 ```cron
-# Every night at 2am, update core+apps, and OS packages (safe mode only)
 0 2 * * * root /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+```
+
+Tuesday to Friday only, same days as NS8's own automatic updates: an admin
+is usually around the same day or next if something breaks, unlike a
+weekend or Monday-morning run:
+
+```cron
+0 0 * * 2-5 root /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+```
+
+Same, with a random delay up to 6h, matching NS8's own `RandomizedDelaySec=6h`:
+
+```cron
+0 0 * * 2-5 root sleep $((RANDOM % 21600)) && /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
+```
+
+Once a week, Sunday (`/etc/cron.weekly` default day) — not recommended, nobody's
+around to fix a broken update before Monday:
+
+```cron
+0 3 * * 0 root /usr/local/sbin/ns8-cluster-updater.sh --all >/dev/null 2>&1
 ```
 
 ## Known limitations
