@@ -209,24 +209,25 @@ if [ "$DO_OS" = yes ]; then
     ANY_REBOOT=no
     log INFO "OS update mode: $OS_MODE"
     while IFS=$'\t' read -r NID LOCAL HOSTNAME VPNIP; do
+        NODE_OUT=$(mktemp)
         if [ "$LOCAL" = "true" ]; then
             log STEP "OS update on node $NID (local, $HOSTNAME)"
-            OUT=$(os_update_local "$OS_MODE" 2>&1)
-            RC=$?
+            os_update_local "$OS_MODE" 2>&1 | tee -a "$LOGFILE" "$NODE_OUT"
+            RC=${PIPESTATUS[0]}
         else
-            [ -n "$VPNIP" ] || { log FAIL "no vpn ip for node $NID"; continue; }
+            [ -n "$VPNIP" ] || { log FAIL "no vpn ip for node $NID"; rm -f "$NODE_OUT"; continue; }
             log STEP "OS update on node $NID (remote, $HOSTNAME, $VPNIP)"
-            OUT=$(ssh -n -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@$VPNIP" \
-                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1)
-            RC=$?
+            ssh -n -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@$VPNIP" \
+                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1 | tee -a "$LOGFILE" "$NODE_OUT"
+            RC=${PIPESTATUS[0]}
         fi
-        printf '%s\n' "$OUT" >>"$LOGFILE"
         if [ "$RC" -eq 0 ]; then
             log OK "OS update node $NID"
-            echo "$OUT" | grep -q 'REBOOT_NEEDED=yes' && ANY_REBOOT=yes
+            grep -q 'REBOOT_NEEDED=yes' "$NODE_OUT" && ANY_REBOOT=yes
         else
             log FAIL "OS update node $NID (exit $RC)"
         fi
+        rm -f "$NODE_OUT"
     done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local, .hostname, .vpn.ip_address] | @tsv')
 
     log INFO "reboot needed on at least one node: $ANY_REBOOT"
