@@ -1,6 +1,4 @@
 #!/bin/bash
-# Update NS8 core, apps, OS (apt/dnf), on demand. Run on cluster leader as root.
-# No flag: show help, do nothing. Single append-only log, ready for logrotate.
 
 set -uo pipefail
 
@@ -22,7 +20,8 @@ Usage: ns8-full-update.sh [--core] [--modules] [--os-safe|--os-full] [--all] [-h
                apt: sources.list only, plain upgrade)
   --os-full    update OS packages, all enabled repos, full dependency
                resolution (dnf: all repos, e.g. EPEL; apt: dist-upgrade)
-  --all        shortcut for --core --modules --os-safe
+  --all        shortcut for --os-safe --core --modules (same order NS8's own
+               automatic updates use: OS, then core, then apps)
   -h, --help   show this help and exit
 
 No flag given: print this help, do nothing.
@@ -42,7 +41,7 @@ for arg in "$@"; do
         --modules) DO_MODULES=yes ;;
         --os-safe) DO_OS=yes; OS_MODE=safe ;;
         --os-full) DO_OS=yes; OS_MODE=full ;;
-        --all) DO_CORE=yes; DO_MODULES=yes; DO_OS=yes; OS_MODE=safe ;;
+        --all) DO_OS=yes; OS_MODE=safe; DO_CORE=yes; DO_MODULES=yes ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage; exit 1 ;;
     esac
@@ -55,7 +54,6 @@ log() {
 }
 
 run_step() {
-    # run_step "label" cmd args...
     local label="$1"; shift
     log STEP "start: $label"
     local out
@@ -76,31 +74,52 @@ die() {
     exit 1
 }
 
-# --- version snapshot / diff helpers -----------------------------------
+dump_json() {
+    printf '%s: %s\n' "$1" "$2" >>"$LOGFILE"
+}
+
+api_cli_silent() {
+    # Same contract as `api-cli run <action> --data <json>`, but submits with
+    # extra.isNotificationHidden so it doesn't toast in every admin's UI.
+    # api-cli itself hardcodes that flag to false with no way to override it.
+    local action="$1"
+    # Match api-cli's own default: no data means JSON null, not "{}"
+    # (some actions, e.g. list-updates, reject an object as input).
+    local data="${2:-null}"
+    runagent python3 -c '
+import sys, json
+import agent, agent.tasks
+action, data = sys.argv[1], json.loads(sys.argv[2])
+extra = {"title": f"cluster/{action}", "description": "ns8-cluster-updater", "isNotificationHidden": True}
+response = agent.tasks.run("cluster", action, data, extra=extra, endpoint="redis://cluster-leader")
+if response["exit_code"] != 0:
+    print(response.get("error", ""), file=sys.stderr, end="")
+print(json.dumps(response["output"]))
+sys.exit(response["exit_code"])
+' "$action" "$data"
+}
 
 snapshot_core_modules() {
-    api-cli run list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update}]'
+    api_cli_silent list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
 }
 
 snapshot_installed_modules() {
-    api-cli run list-installed-modules 2>>"$LOGFILE" | jq -c '[.[] | .[] | {id, version}]'
+    api_cli_silent list-installed-modules 2>>"$LOGFILE" | jq -c '[.[] | .[] | {id, version, node}]'
 }
 
 any_update_pending() {
-    # any_update_pending "$SNAPSHOT_JSON" -- true (0) if any entry has a non-empty "update" field
     jq -e 'any(.[]; .update != "")' <<<"$1" >/dev/null
 }
 
 log_version_diff() {
-    # log_version_diff "label" "$BEFORE_JSON" "$AFTER_JSON"
     local label="$1" before="$2" after="$3"
     local diff_lines
     diff_lines=$(jq -n -r --argjson before "$before" --argjson after "$after" '
         ($before | map({(.id): .version}) | add // {}) as $b |
-        ($after  | map({(.id): .version}) | add // {}) as $a |
+        ($after  | map({(.id): {version, node}}) | add // {}) as $a |
         $a | to_entries[]
-        | select($b[.key] != .value)
-        | "\(.key): \($b[.key] // "new") -> \(.value)"
+        | select($b[.key] != .value.version)
+        | "\(.key) (node \(.value.node // "?")): \($b[.key] // "new") -> \(.value.version)"
     ')
     if [ -z "$diff_lines" ]; then
         log INFO "$label: no version change"
@@ -112,8 +131,7 @@ log_version_diff() {
 }
 
 os_update_local() {
-    # $1: safe or full. Runs on the machine executing this function,
-    # local or remote via ssh -s.
+    # shipped to remote nodes via `declare -f` over ssh, must stay self-contained
     local mode="$1"
     if command -v dnf >/dev/null 2>&1; then
         if [ "$mode" = safe ]; then
@@ -172,61 +190,24 @@ os_update_local() {
 export -f os_update_local
 
 [ "$(id -u)" -eq 0 ] || die "must run as root"
-command -v api-cli >/dev/null 2>&1 || die "api-cli not found, not an NS8 node"
+command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 
 log INFO "===== run start ====="
 log INFO "log file: $LOGFILE"
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
 
-STATUS=$(api-cli run get-cluster-status 2>>"$LOGFILE") || die "get-cluster-status failed"
-echo "$STATUS" >>"$LOGFILE"
-IS_LEADER=$(echo "$STATUS" | jq -r '.leader')
+STATUS=$(api_cli_silent get-cluster-status 2>>"$LOGFILE") || die "get-cluster-status failed"
+dump_json "get-cluster-status" "$STATUS"
+IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned invalid data"
 [ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
 log OK "running on cluster leader"
 
-if [ "$DO_CORE" = yes ]; then
-    CORE_BEFORE=$(snapshot_core_modules)
-    if any_update_pending "$CORE_BEFORE"; then
-        NODE_IDS=$(echo "$STATUS" | jq -c '[.nodes[].id]')
-        log INFO "updating core on nodes: $NODE_IDS"
-        run_step "update-core" api-cli run update-core --data "{\"nodes\":$NODE_IDS}" \
-            || die "core update failed, check $LOGFILE"
-        run_step "verify cluster status after core update" api-cli run get-cluster-status \
-            || die "cluster not responsive after core update"
-        CORE_AFTER=$(snapshot_core_modules)
-        log_version_diff "core components" "$CORE_BEFORE" "$CORE_AFTER"
-    else
-        log INFO "no core update available, skipping update-core"
-    fi
-fi
-
-if [ "$DO_MODULES" = yes ]; then
-    PENDING=$(api-cli run list-updates 2>>"$LOGFILE")
-    echo "$PENDING" >>"$LOGFILE"
-    PENDING_COUNT=$(echo "$PENDING" | jq 'length')
-    if [ "$PENDING_COUNT" -gt 0 ]; then
-        MODULES_BEFORE=$(snapshot_installed_modules)
-        run_step "update-modules" api-cli run update-modules --data '{}' \
-            || die "modules update failed, check $LOGFILE"
-        MODULES_AFTER=$(snapshot_installed_modules)
-        log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
-        REMAINING=$(api-cli run list-updates 2>>"$LOGFILE")
-        echo "$REMAINING" >>"$LOGFILE"
-        REMAINING_COUNT=$(echo "$REMAINING" | jq 'length')
-        if [ "$REMAINING_COUNT" -eq 0 ]; then
-            log OK "no pending app updates left"
-        else
-            log WARN "still $REMAINING_COUNT app update(s) pending after update-modules"
-        fi
-    else
-        log INFO "no app update available, skipping update-modules"
-    fi
-fi
+# Order matches NS8's own automatic updates (cluster/bin/apply-updates):
+# OS packages first, then core, then apps.
 
 if [ "$DO_OS" = yes ]; then
     ANY_REBOOT=no
     log INFO "OS update mode: $OS_MODE"
-    # loop every cluster node: local one runs in-process, others via ssh over VPN ip
     while IFS=$'\t' read -r NID LOCAL HOSTNAME VPNIP; do
         if [ "$LOCAL" = "true" ]; then
             log STEP "OS update on node $NID (local, $HOSTNAME)"
@@ -236,7 +217,7 @@ if [ "$DO_OS" = yes ]; then
             [ -n "$VPNIP" ] || { log FAIL "no vpn ip for node $NID"; continue; }
             log STEP "OS update on node $NID (remote, $HOSTNAME, $VPNIP)"
             OUT=$(ssh -n -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@$VPNIP" \
-                "$(declare -f os_update_local); os_update_local $OS_MODE" 2>&1)
+                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1)
             RC=$?
         fi
         printf '%s\n' "$OUT" >>"$LOGFILE"
@@ -250,6 +231,45 @@ if [ "$DO_OS" = yes ]; then
 
     log INFO "reboot needed on at least one node: $ANY_REBOOT"
     [ "$ANY_REBOOT" = yes ] && log WARN "reboot manually the affected node(s), script does not reboot"
+fi
+
+if [ "$DO_CORE" = yes ]; then
+    CORE_BEFORE=$(snapshot_core_modules) || die "failed to fetch core modules status, check $LOGFILE"
+    if any_update_pending "$CORE_BEFORE"; then
+        NODE_IDS=$(jq -c '[.nodes[].id]' <<<"$STATUS") || die "failed to compute node list"
+        log INFO "updating core on nodes: $NODE_IDS"
+        run_step "update-core" api_cli_silent update-core "{\"nodes\":$NODE_IDS}" \
+            || die "core update failed, check $LOGFILE"
+        run_step "verify cluster status after core update" api_cli_silent get-cluster-status \
+            || die "cluster not responsive after core update"
+        CORE_AFTER=$(snapshot_core_modules) || die "failed to fetch core modules status after update, check $LOGFILE"
+        log_version_diff "core components" "$CORE_BEFORE" "$CORE_AFTER"
+    else
+        log INFO "no core update available, skipping update-core"
+    fi
+fi
+
+if [ "$DO_MODULES" = yes ]; then
+    PENDING=$(api_cli_silent list-updates 2>>"$LOGFILE") || die "list-updates failed, check $LOGFILE"
+    dump_json "list-updates (before)" "$PENDING"
+    PENDING_COUNT=$(jq 'length' <<<"$PENDING") || die "list-updates returned invalid data"
+    if [ "$PENDING_COUNT" -gt 0 ]; then
+        MODULES_BEFORE=$(snapshot_installed_modules) || die "failed to fetch installed modules, check $LOGFILE"
+        run_step "update-modules" api_cli_silent update-modules '{}' \
+            || die "modules update failed, check $LOGFILE"
+        MODULES_AFTER=$(snapshot_installed_modules) || die "failed to fetch installed modules after update, check $LOGFILE"
+        log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
+        REMAINING=$(api_cli_silent list-updates 2>>"$LOGFILE") || die "list-updates failed after update-modules, check $LOGFILE"
+        dump_json "list-updates (after)" "$REMAINING"
+        REMAINING_COUNT=$(jq 'length' <<<"$REMAINING") || die "list-updates returned invalid data"
+        if [ "$REMAINING_COUNT" -eq 0 ]; then
+            log OK "no pending app updates left"
+        else
+            log WARN "still $REMAINING_COUNT app update(s) pending after update-modules"
+        fi
+    else
+        log INFO "no app update available, skipping update-modules"
+    fi
 fi
 
 log OK "requested steps done, full log: $LOGFILE"
