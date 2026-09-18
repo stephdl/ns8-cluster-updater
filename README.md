@@ -18,6 +18,14 @@ doesn't toast in every admin's UI. `api-cli` hardcodes that flag to `false`
 with no override, so the script calls the underlying `agent.tasks` Python
 API directly for this. Failures still show up normally.
 
+## Install
+
+```
+curl -o /usr/local/sbin/ns8-cluster-updater.sh https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.sh
+chmod +x /usr/local/sbin/ns8-cluster-updater.sh
+curl -o /etc/logrotate.d/ns8-cluster-updater https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/logrotate.d/ns8-cluster-updater
+```
+
 ## Requirements
 
 - `root`, on the cluster leader (checks `get-cluster-status .leader`).
@@ -71,11 +79,7 @@ needs one:
 ## Logging
 
 Everything appends to one file, `/var/log/ns8-full-update.log`, timestamped
-per line, ready for `logrotate`:
-
-```
-cp logrotate.d/ns8-cluster-updater /etc/logrotate.d/ns8-cluster-updater
-```
+per line. Logrotate config: see Install above.
 
 ## Example: cron
 
