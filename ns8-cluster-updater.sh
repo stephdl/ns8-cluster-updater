@@ -1,6 +1,4 @@
 #!/bin/bash
-# Update NS8 core, apps, OS (apt/dnf), on demand. Run on cluster leader as root.
-# No flag: show help, do nothing. Single append-only log, ready for logrotate.
 
 set -uo pipefail
 
@@ -56,7 +54,6 @@ log() {
 }
 
 run_step() {
-    # run_step "label" cmd args...
     local label="$1"; shift
     log STEP "start: $label"
     local out
@@ -78,18 +75,13 @@ die() {
 }
 
 dump_json() {
-    # dump_json "label" "$JSON" -- writes a labelled raw dump to the log file
     printf '%s: %s\n' "$1" "$2" >>"$LOGFILE"
 }
 
 api_cli_silent() {
-    # api_cli_silent <cluster-action> [json_data] -- same contract as
-    # `api-cli run <action> --data <json>` (stdout: JSON output, exit code:
-    # task exit code), but submits the task with extra.isNotificationHidden
-    # so it doesn't pop a toast in every admin's cluster-admin UI. api-cli
-    # itself hardcodes isNotificationHidden to false with no CLI flag to
-    # override it, so this calls the underlying agent.tasks Python API
-    # directly instead.
+    # Same contract as `api-cli run <action> --data <json>`, but submits with
+    # extra.isNotificationHidden so it doesn't toast in every admin's UI.
+    # api-cli itself hardcodes that flag to false with no way to override it.
     local action="$1"
     # Match api-cli's own default: no data means JSON null, not "{}"
     # (some actions, e.g. list-updates, reject an object as input).
@@ -107,8 +99,6 @@ sys.exit(response["exit_code"])
 ' "$action" "$data"
 }
 
-# --- version snapshot / diff helpers -----------------------------------
-
 snapshot_core_modules() {
     api_cli_silent list-core-modules 2>>"$LOGFILE" | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
 }
@@ -118,12 +108,10 @@ snapshot_installed_modules() {
 }
 
 any_update_pending() {
-    # any_update_pending "$SNAPSHOT_JSON" -- true (0) if any entry has a non-empty "update" field
     jq -e 'any(.[]; .update != "")' <<<"$1" >/dev/null
 }
 
 log_version_diff() {
-    # log_version_diff "label" "$BEFORE_JSON" "$AFTER_JSON"
     local label="$1" before="$2" after="$3"
     local diff_lines
     diff_lines=$(jq -n -r --argjson before "$before" --argjson after "$after" '
@@ -143,8 +131,7 @@ log_version_diff() {
 }
 
 os_update_local() {
-    # $1: safe or full. Runs on the machine executing this function,
-    # local or remote via ssh -s.
+    # shipped to remote nodes via `declare -f` over ssh, must stay self-contained
     local mode="$1"
     if command -v dnf >/dev/null 2>&1; then
         if [ "$mode" = safe ]; then
@@ -221,7 +208,6 @@ log OK "running on cluster leader"
 if [ "$DO_OS" = yes ]; then
     ANY_REBOOT=no
     log INFO "OS update mode: $OS_MODE"
-    # loop every cluster node: local one runs in-process, others via ssh over VPN ip
     while IFS=$'\t' read -r NID LOCAL HOSTNAME VPNIP; do
         if [ "$LOCAL" = "true" ]; then
             log STEP "OS update on node $NID (local, $HOSTNAME)"
