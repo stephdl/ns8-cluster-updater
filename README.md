@@ -124,6 +124,53 @@ systemctl start ns8-cluster-updater.service
 The shipped `.service` always runs `--all`; edit `ExecStart` in
 `/etc/systemd/system/ns8-cluster-updater.service` to change the flags.
 
+### Changing the schedule
+
+Don't edit `ns8-cluster-updater.timer` directly: a later `curl` reinstall
+overwrites it. Use a drop-in instead:
+
+```
+systemctl edit ns8-cluster-updater.timer
+```
+
+This opens an editor on an override file. Add only the keys you want to
+change, under `[Timer]`:
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=Sun 03:00:00
+```
+
+The empty `OnCalendar=` first clears the shipped `Tue..Fri 00:00:00` value;
+systemd appends settings instead of replacing them, so skipping that line
+would leave both active. Some other schedules:
+
+```ini
+# Every day at 1am
+OnCalendar=*-*-* 01:00:00
+
+# Twice a week, Monday and Thursday at 22:00
+OnCalendar=Mon,Thu 22:00:00
+
+# First day of the month, 4am
+OnCalendar=*-*-01 04:00:00
+```
+
+To change the randomized delay or drop it entirely:
+
+```ini
+[Timer]
+RandomizedDelaySec=1h
+```
+
+After saving, reload and check the next run time:
+
+```
+systemctl daemon-reload
+systemctl list-timers ns8-cluster-updater.timer
+```
+
 ## Known limitations
 
 - `--os-full` on Debian can install a new kernel; the script warns but never
