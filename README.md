@@ -51,6 +51,10 @@ ns8-cluster-updater.sh [--core] [--modules] [--os-safe|--os-full] [--all] [-h|--
 
 No option: prints usage, does nothing.
 
+Combine `--all` with `--os-full` to run everything with the full OS mode
+instead of safe: `ns8-cluster-updater.sh --all --os-full` (order doesn't
+matter).
+
 ### `--os-safe` vs `--os-full`
 
 |              | dnf (Rocky/AlmaLinux)                          | apt (Debian/Ubuntu) |
