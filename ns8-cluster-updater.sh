@@ -41,7 +41,7 @@ for arg in "$@"; do
         --modules) DO_MODULES=yes ;;
         --os-safe) DO_OS=yes; OS_MODE=safe ;;
         --os-full) DO_OS=yes; OS_MODE=full ;;
-        --all) DO_OS=yes; OS_MODE=safe; DO_CORE=yes; DO_MODULES=yes ;;
+        --all) DO_OS=yes; DO_CORE=yes; DO_MODULES=yes; [ -n "$OS_MODE" ] || OS_MODE=safe ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage; exit 1 ;;
     esac
