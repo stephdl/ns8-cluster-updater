@@ -80,7 +80,7 @@ Everything is appended to a single file, `/var/log/ns8-full-update.log`
 straightforward to feed to `logrotate`. Install the provided config:
 
 ```
-cp ns8-cluster-updater.logrotate /etc/logrotate.d/ns8-cluster-updater
+cp logrotate.d/ns8-cluster-updater /etc/logrotate.d/ns8-cluster-updater
 ```
 
 ## Example: cron
