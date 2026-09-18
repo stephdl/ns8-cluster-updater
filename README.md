@@ -13,13 +13,21 @@ image to install (this is how NS8 core's own `update-core.d/` hooks work).
 That restart drops the cluster-admin UI websocket and any in-flight
 `api-cli` task for a few seconds. This script checks whether an update is
 actually available (`list-core-modules` / `list-updates`) before calling the
-action, so a no-op run doesn't restart anything.
+action, so a no-op run doesn't restart anything. If a pre-check itself fails
+(`api-cli`/`jq` error), the script dies loudly instead of silently treating
+the failure as "nothing pending".
+
+Every cluster task is also submitted with `extra.isNotificationHidden`, so it
+doesn't pop a toast in every admin's cluster-admin UI. `api-cli` hardcodes
+this to `false` with no CLI flag to change it, so the script talks to the
+underlying `agent.tasks` Python API directly for this one thing. Failures
+still surface normally, only successful no-op-looking tasks stay quiet.
 
 ## Requirements
 
 - Run as `root`, on the cluster leader (the script checks
   `get-cluster-status .leader` and refuses otherwise).
-- `api-cli`, `jq`.
+- `runagent` (NS8's agent framework) and `jq`.
 - For `--os-safe`/`--os-full`: passwordless root SSH from the leader to every
   worker node over the cluster VPN (`10.5.4.0/24` by default). NS8 leaders
   already have this by design (used for cluster management), so nothing extra
