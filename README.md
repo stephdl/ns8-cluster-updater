@@ -137,11 +137,8 @@ ExecStart=/usr/local/sbin/ns8-cluster-updater.sh --core --modules
 
 The empty `ExecStart=` first clears the shipped `--all` command; like
 `OnCalendar`, systemd appends `ExecStart=` lines instead of replacing them.
-Reload after saving:
-
-```
-systemctl daemon-reload
-```
+`systemctl edit` reloads the unit itself on save, no manual
+`daemon-reload` needed.
 
 ### Changing the schedule
 
@@ -183,10 +180,9 @@ To change the randomized delay or drop it entirely:
 RandomizedDelaySec=1h
 ```
 
-After saving, reload and check the next run time:
+`systemctl edit` reloads the unit itself on save. Check the next run time:
 
 ```
-systemctl daemon-reload
 systemctl list-timers ns8-cluster-updater.timer
 ```
 
