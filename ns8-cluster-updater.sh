@@ -12,19 +12,16 @@ SD_INFO="<6>"
 DO_CORE=no
 DO_MODULES=no
 DO_OS=no
-OS_MODE=""
 
 usage() {
     cat <<'EOF'
-Usage: ns8-full-update.sh [--core] [--modules] [--os-safe|--os-full] [--all] [-h|--help]
+Usage: ns8-cluster-updater.sh [--core] [--modules] [--os-safe] [--all] [-h|--help]
 
   --core       update NS8 core on all cluster nodes
   --modules    update all NS8 app instances (all nodes)
-  --os-safe    update OS packages, restricted to official distro repos only,
-               no package removal/addition (dnf: ns-baseos+ns-appstream only;
-               apt: sources.list only, plain upgrade)
-  --os-full    update OS packages, all enabled repos, full dependency
-               resolution (dnf: all repos, e.g. EPEL; apt: dist-upgrade)
+  --os-safe    update OS packages of Rocky-like nodes with NS8's update-os
+               node action (ns-baseos+ns-appstream only); Debian nodes are
+               skipped
   --all        shortcut for --os-safe --core --modules (same order NS8's own
                automatic updates use: OS, then core, then apps)
   -h, --help   show this help and exit
@@ -46,9 +43,9 @@ for arg in "$@"; do
     case "$arg" in
         --core) DO_CORE=yes ;;
         --modules) DO_MODULES=yes ;;
-        --os-safe) DO_OS=yes; OS_MODE=safe ;;
-        --os-full) DO_OS=yes; OS_MODE=full ;;
-        --all) DO_OS=yes; DO_CORE=yes; DO_MODULES=yes; [ -n "$OS_MODE" ] || OS_MODE=safe ;;
+        --os-safe) DO_OS=yes ;;
+        --os-full) echo "--os-full was removed, use --os-safe" >&2; exit 1 ;;
+        --all) DO_OS=yes; DO_CORE=yes; DO_MODULES=yes ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage; exit 1 ;;
     esac
@@ -103,32 +100,65 @@ dump_json() {
 }
 
 api_cli_silent() {
+    api_task_silent cluster "$@"
+}
+
+api_task_silent() {
     # Same contract as `api-cli run <action> --data <json>`, but submits with
     # extra.isNotificationHidden so it doesn't toast in every admin's UI.
     # api-cli itself hardcodes that flag to false with no way to override it.
-    local action="$1"
+    local agent_id="$1" action="$2"
     # Match api-cli's own default: no data means JSON null, not "{}"
     # (some actions, e.g. list-updates, reject an object as input).
-    local data="${2:-null}"
+    local data="${3:-null}"
     runagent python3 -c '
 import sys, json
 import agent, agent.tasks
-action, data = sys.argv[1], json.loads(sys.argv[2])
-extra = {"title": f"cluster/{action}", "description": "ns8-cluster-updater", "isNotificationHidden": True}
-response = agent.tasks.run("cluster", action, data, extra=extra, endpoint="redis://cluster-leader")
+agent_id, action, data = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+extra = {"title": f"{agent_id}/{action}", "description": "ns8-cluster-updater", "isNotificationHidden": True}
+response = agent.tasks.run(agent_id, action, data, extra=extra, endpoint="redis://cluster-leader")
 if response["exit_code"] != 0:
     print(response.get("error", ""), file=sys.stderr, end="")
 print(json.dumps(response["output"]))
 sys.exit(response["exit_code"])
-' "$action" "$data"
+' "$agent_id" "$action" "$data"
+}
+
+managed_view_read() {
+    # update-core and update-modules switch to the "managed" repository view
+    # when the task has no user (as here), while the list-core-modules and
+    # list-updates actions read the "latest" view. With a subscription the
+    # managed view lags behind, so the pre-check must read the same view as
+    # the update actions. Without a subscription both views are the same.
+    runagent python3 -c '
+import sys, json
+import agent, cluster.modules
+cluster.modules.select_repo_view("managed")
+rdb = agent.redis_connect(privileged=True)
+if sys.argv[1] == "core":
+    json.dump(cluster.modules.list_core_modules(rdb), sys.stdout)
+else:
+    json.dump(cluster.modules.list_updates(rdb, skip_core_modules=True), sys.stdout)
+' "$1"
 }
 
 snapshot_core_modules() {
-    api_cli_silent list-core-modules | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
+    managed_view_read core | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
 }
 
 snapshot_installed_modules() {
     api_cli_silent list-installed-modules | jq -c '[.[] | .[] | {id, version, node}]'
+}
+
+local_reboot_needed() {
+    if command -v needs-restarting >/dev/null 2>&1; then
+        ! needs-restarting -r >/dev/null 2>&1
+        return
+    fi
+    # needs-restarting comes from dnf-utils, which is not always installed.
+    local latest
+    latest=$(rpm -q --last kernel-core 2>/dev/null | head -1 | awk '{print $1}' | sed 's/^kernel-core-//')
+    [ -n "$latest" ] && [ "$latest" != "$(uname -r)" ]
 }
 
 any_update_pending() {
@@ -153,65 +183,6 @@ log_version_diff() {
     fi
 }
 
-os_update_local() {
-    # shipped to remote nodes via `declare -f` over ssh, must stay self-contained
-    local mode="$1"
-    if command -v dnf >/dev/null 2>&1; then
-        if [ "$mode" = safe ]; then
-            echo "dnf mode: safe, repos restricted to ns-baseos,ns-appstream"
-            dnf --disablerepo='*' --enablerepo=ns-baseos,ns-appstream --refresh update -y || exit 1
-        else
-            echo "dnf mode: full, all enabled repos"
-            dnf makecache -y && dnf upgrade -y || exit 1
-        fi
-        if command -v needs-restarting >/dev/null 2>&1 && ! needs-restarting -r >/dev/null 2>&1; then
-            echo "REBOOT_NEEDED=yes"
-        else
-            echo "REBOOT_NEEDED=no"
-        fi
-    elif command -v apt-get >/dev/null 2>&1; then
-        export DEBIAN_FRONTEND=noninteractive
-        # Keep the locally modified conffile on conflict instead of prompting
-        # or silently taking the maintainer's version.
-        local confopts=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
-        if [ "$mode" = safe ]; then
-            echo "apt mode: safe, sources.list only, no package removal/addition"
-            apt-get -o Dir::Etc::SourceParts=/dev/null update -y \
-                && apt-get -o Dir::Etc::SourceParts=/dev/null "${confopts[@]}" upgrade -y || exit 1
-        else
-            echo "apt mode: full, all sources, dist-upgrade"
-            apt-get update -y && apt-get "${confopts[@]}" dist-upgrade -y || exit 1
-        fi
-        # /var/run/reboot-required needs update-notifier-common, not always installed.
-        # Fallback: needrestart -b, then compare running vs newest installed kernel.
-        if [ -f /var/run/reboot-required ]; then
-            echo "REBOOT_NEEDED=yes"
-        elif command -v needrestart >/dev/null 2>&1; then
-            if needrestart -b 2>/dev/null | grep -q '^NEEDRESTART-KSTA: [23]'; then
-                echo "REBOOT_NEEDED=yes"
-            else
-                echo "REBOOT_NEEDED=no"
-            fi
-        else
-            running_kernel=$(uname -r)
-            # Exclude the transitional -unsigned build: it's an installer artifact,
-            # not a distinct bootable kernel, and never matches `uname -r`.
-            latest_kernel=$(dpkg-query -W -f='${Package}\n' 'linux-image-[0-9]*' 2>/dev/null \
-                | grep -v -- '-unsigned$' \
-                | sed 's/^linux-image-//' | sort -V | tail -1)
-            if [ -n "$latest_kernel" ] && [ "$latest_kernel" != "$running_kernel" ]; then
-                echo "REBOOT_NEEDED=yes (kernel: running $running_kernel, installed $latest_kernel)"
-            else
-                echo "REBOOT_NEEDED=no"
-            fi
-        fi
-    else
-        echo "no apt or dnf found" >&2
-        exit 1
-    fi
-}
-export -f os_update_local
-
 [ "$(id -u)" -eq 0 ] || die "must run as root"
 command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 
@@ -224,36 +195,46 @@ IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned in
 [ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
 log OK "running on cluster leader"
 
+# With a subscription, NS8's own automatic updates (apply-updates) own this
+# job; running both would race on the same actions and dnf lock.
+SUBSCRIPTION=$(api_cli_silent get-subscription) || die "get-subscription failed"
+if jq -e '.subscription != null' <<<"$SUBSCRIPTION" >/dev/null; then
+    log OK "subscription found, updates are handled by NS8 automatic updates, nothing to do"
+    log INFO "===== run end ====="
+    exit 0
+fi
+
 # Order matches NS8's own automatic updates (cluster/bin/apply-updates):
 # OS packages first, then core, then apps.
 
 if [ "$DO_OS" = yes ]; then
-    ANY_REBOOT=no
-    log INFO "OS update mode: $OS_MODE"
-    while IFS=$'\t' read -r NID LOCAL HOSTNAME VPNIP; do
-        NODE_OUT=$(mktemp)
-        if [ "$LOCAL" = "true" ]; then
-            log STEP "OS update on node $NID (local, $HOSTNAME)"
-            os_update_local "$OS_MODE" 2>&1 | tee "$NODE_OUT" >&2
-            RC=${PIPESTATUS[0]}
-        else
-            [ -n "$VPNIP" ] || { log FAIL "no vpn ip for node $NID"; rm -f "$NODE_OUT"; continue; }
-            log STEP "OS update on node $NID (remote, $HOSTNAME, $VPNIP)"
-            ssh -n -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@$VPNIP" \
-                "$(declare -f os_update_local); os_update_local \"$OS_MODE\"" 2>&1 | tee "$NODE_OUT" >&2
-            RC=${PIPESTATUS[0]}
-        fi
-        if [ "$RC" -eq 0 ]; then
+    REBOOT_LOCAL=no
+    # update-os exits 0 without doing anything on a node without dnf, so
+    # Debian nodes must be filtered out here. os_release comes from metrics:
+    # when it is missing, running update-os is still harmless.
+    NODES_OS=$(api_cli_silent list-nodes | jq -c '[.nodes[] | {(.node_id | tostring): .os_release.name}] | add // {}') \
+        || { log WARN "list-nodes failed, OS of nodes unknown"; NODES_OS='{}'; }
+    while IFS=$'\t' read -r NID LOCAL HOSTNAME; do
+        OS_NAME=$(jq -r --arg id "$NID" '.[$id] // "unknown OS"' <<<"$NODES_OS")
+        case "$OS_NAME" in
+            Debian*|Ubuntu*)
+                log WARN "OS update node $NID ($HOSTNAME, $OS_NAME): not supported, skipped"
+                continue
+                ;;
+        esac
+        log STEP "OS update on node $NID ($HOSTNAME, $OS_NAME)"
+        if api_task_silent "node/$NID" update-os >/dev/null; then
             log OK "OS update node $NID"
-            grep -q 'REBOOT_NEEDED=yes' "$NODE_OUT" && ANY_REBOOT=yes
         else
-            log FAIL "OS update node $NID (exit $RC)"
+            log FAIL "OS update node $NID (exit $?)"
+            continue
         fi
-        rm -f "$NODE_OUT"
-    done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local, .hostname, .vpn.ip_address] | @tsv')
+        [ "$LOCAL" = "true" ] && local_reboot_needed && REBOOT_LOCAL=yes
+    done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local, .hostname] | @tsv')
 
-    log INFO "reboot needed on at least one node: $ANY_REBOOT"
-    [ "$ANY_REBOOT" = yes ] && log WARN "reboot manually the affected node(s), script does not reboot"
+    log INFO "reboot needed on this node: $REBOOT_LOCAL"
+    [ "$REBOOT_LOCAL" = yes ] && log WARN "reboot this node manually, script does not reboot"
+    log INFO "reboot state of other nodes is not reported, check them with needs-restarting -r"
 fi
 
 if [ "$DO_CORE" = yes ]; then
@@ -273,7 +254,7 @@ if [ "$DO_CORE" = yes ]; then
 fi
 
 if [ "$DO_MODULES" = yes ]; then
-    PENDING=$(api_cli_silent list-updates) || die "list-updates failed"
+    PENDING=$(managed_view_read updates) || die "list-updates failed"
     dump_json "list-updates (before)" "$PENDING"
     PENDING_COUNT=$(jq 'length' <<<"$PENDING") || die "list-updates returned invalid data"
     if [ "$PENDING_COUNT" -gt 0 ]; then
@@ -282,7 +263,7 @@ if [ "$DO_MODULES" = yes ]; then
             || die "modules update failed"
         MODULES_AFTER=$(snapshot_installed_modules) || die "failed to fetch installed modules after update"
         log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
-        REMAINING=$(api_cli_silent list-updates) || die "list-updates failed after update-modules"
+        REMAINING=$(managed_view_read updates) || die "list-updates failed after update-modules"
         dump_json "list-updates (after)" "$REMAINING"
         REMAINING_COUNT=$(jq 'length' <<<"$REMAINING") || die "list-updates returned invalid data"
         if [ "$REMAINING_COUNT" -eq 0 ]; then

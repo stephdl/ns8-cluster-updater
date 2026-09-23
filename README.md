@@ -37,58 +37,51 @@ systemctl daemon-reload
 
 - `root`, on the cluster leader (checks `get-cluster-status .leader`).
 - `runagent` and `jq`.
-- For `--os-safe`/`--os-full`: passwordless root SSH to every worker over the
-  cluster VPN — already there by default on any NS8 cluster.
-- Works on mixed clusters (dnf and apt nodes together).
+- No SSH between nodes: OS updates run as NS8 `update-os` node tasks.
 
 ## Usage
 
 ```
-ns8-cluster-updater.sh [--core] [--modules] [--os-safe|--os-full] [--all] [-h|--help]
+ns8-cluster-updater.sh [--core] [--modules] [--os-safe] [--all] [-h|--help]
 ```
 
 | Option        | Effect |
 |---------------|--------|
 | `--core`      | Update NS8 core on all cluster nodes, only if a newer version is available. |
 | `--modules`   | Update all NS8 app instances, on all nodes, only if at least one has a pending update. |
-| `--os-safe`   | Update OS packages, restricted to official distro repos, no package removal/addition. |
-| `--os-full`   | Update OS packages, all enabled repos, full dependency resolution. Can install a new kernel. |
+| `--os-safe`   | Update OS packages of Rocky-like nodes with NS8's `update-os` node action. Debian nodes are skipped. |
 | `--all`       | Shortcut for `--os-safe --core --modules`, run in that order (same as NS8's own automatic updates). |
 | `-h`, `--help`| Show usage and exit. |
 
 No option: prints usage, does nothing.
 
-Combine `--all` with `--os-full` to run everything with the full OS mode
-instead of safe: `ns8-cluster-updater.sh --all --os-full` (order doesn't
-matter).
+### OS updates
 
-### `--os-safe` vs `--os-full`
+`--os-safe` runs NS8's own `update-os` action on each node, one node at a
+time. That action runs `dnf update` restricted to `ns-baseos` and
+`ns-appstream`, the same repositories NS8 automatic updates use.
 
-|              | dnf (Rocky/AlmaLinux)                          | apt (Debian/Ubuntu) |
-|--------------|-------------------------------------------------|----------------------|
-| `--os-safe`  | `--disablerepo='*' --enablerepo=ns-baseos,ns-appstream` (same repos as NS8's own `update-os` node action) | `sources.list` only (`sources.list.d/` ignored), plain `apt-get upgrade` (never removes or adds a package) |
-| `--os-full`  | all enabled repos (e.g. EPEL)                    | all sources, `apt-get dist-upgrade` (full dependency resolution, can add/remove packages, install a new kernel) |
+Only Rocky-like nodes (Rocky Linux, AlmaLinux) are supported. The node OS
+comes from `cluster/list-nodes`. Debian and Ubuntu nodes get a warning and
+are skipped: update them by hand.
 
-`--os-safe` is the low-risk default, also used by `--all`. `--os-full` must
-be requested explicitly.
+### Subscription
 
-On Debian/Ubuntu, both modes add `--force-confdef --force-confold`: on a
-config file conflict, dpkg keeps your local version instead of prompting or
-overwriting it. Fully non-interactive, no manual step needed.
+With a subscription, the script logs a notice and exits 0 without doing
+anything. NS8's own automatic updates handle subscribed clusters, and
+running both would race on the same actions and on the dnf lock. The
+script targets clusters without a subscription.
 
-dnf/apt output streams live to the terminal as it runs (a kernel upgrade can
-take several minutes).
+The pre-checks still read the repository "managed" view, the same view
+`update-core` and `update-modules` use when no user starts them. Today
+that view matches "latest" on the community repository.
 
 ### Reboot detection
 
-The script never reboots. It only reports, at the end, whether any node
-needs one:
-
-- dnf: `needs-restarting -r`.
-- apt: `/var/run/reboot-required`, else `needrestart -b`, else compare
-  running kernel (`uname -r`) to the newest installed `linux-image-*`
-  package (ignoring the transitional `-unsigned` build, an installer
-  artifact that never matches `uname -r`).
+The script never reboots. For the leader, it runs `needs-restarting -r`
+(or compares `uname -r` with the newest `kernel-core` when dnf-utils is
+missing) and reports whether a reboot is needed. `update-os` does not report it, so
+check the other nodes by hand with `needs-restarting -r`.
 
 ## Logging
 
@@ -188,10 +181,13 @@ systemctl list-timers ns8-cluster-updater.timer
 
 ## Known limitations
 
-- `--os-full` on Debian can install a new kernel; the script warns but never
-  reboots. Tested with a real reboot: node rejoins the cluster fine.
-- NS8's own `update-os` node action only supports `dnf`. This script's `apt`
-  support is its own addition, not an NS8 core feature.
+- Only Rocky-like nodes get OS updates. Debian and Ubuntu nodes are
+  skipped. Update them locally on each node, for example with
+  `unattended-upgrades` or
+  [proxmox-updater](https://github.com/stephdl/proxmox-updater), on a day
+  this timer does not run.
+- `--os-full` was removed. Updating from all enabled repos (for example
+  EPEL) could pull a `podman` build NS8 was not tested with.
 - If NS8's native automatic updates are already enabled
   (`set-automatic-updates --data '{"apply_updates_is_active": true}'`), they
   run independently of this script, no coordination between them.
