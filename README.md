@@ -4,14 +4,17 @@ Bash script to update a [NethServer 8](https://nethserver.org) cluster: core,
 applications and OS packages, in one run or separately, with a pre-check that
 skips an update call entirely when nothing is pending.
 
+It targets clusters without a subscription: with one, it does nothing (see
+Subscription below). OS updates cover Rocky-like nodes only.
+
 ## Why
 
 `update-core` restarts `redis.service` and `api-server.service` on every
 node, even with nothing new to install. This drops the UI websocket and any
-in-flight `api-cli` task for a few seconds. The script checks first
-(`list-core-modules` / `list-updates`) and skips the call when there's
-nothing pending. A failed check dies loudly instead of being read as "nothing
-pending".
+in-flight `api-cli` task for a few seconds. The script checks first, reading
+the same repository view as the update actions, and skips the call when
+there's nothing pending. A failed check dies loudly instead of being read as
+"nothing pending".
 
 Every task is also submitted with `extra.isNotificationHidden`, so it
 doesn't toast in every admin's UI. `api-cli` hardcodes that flag to `false`
@@ -63,7 +66,13 @@ time. That action runs `dnf update` restricted to `ns-baseos` and
 
 Only Rocky-like nodes (Rocky Linux, AlmaLinux) are supported. The node OS
 comes from `cluster/list-nodes`. Debian and Ubuntu nodes get a warning and
-are skipped: update them by hand.
+are skipped (see Known limitations). If the OS is unknown, for example when
+metrics are missing, `update-os` still runs: it does nothing on a node
+without dnf.
+
+A failed OS update on one node does not stop the other steps. Core and apps
+are still updated, then the script exits 1 so the systemd run shows as
+failed.
 
 ### Subscription
 

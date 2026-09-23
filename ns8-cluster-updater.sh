@@ -209,6 +209,7 @@ fi
 
 if [ "$DO_OS" = yes ]; then
     REBOOT_LOCAL=no
+    OS_FAILED=no
     # update-os exits 0 without doing anything on a node without dnf, so
     # Debian nodes must be filtered out here. os_release comes from metrics:
     # when it is missing, running update-os is still harmless.
@@ -227,6 +228,7 @@ if [ "$DO_OS" = yes ]; then
             log OK "OS update node $NID"
         else
             log FAIL "OS update node $NID (exit $?)"
+            OS_FAILED=yes
             continue
         fi
         [ "$LOCAL" = "true" ] && local_reboot_needed && REBOOT_LOCAL=yes
@@ -276,5 +278,12 @@ if [ "$DO_MODULES" = yes ]; then
     fi
 fi
 
+# A failed OS update doesn't stop core and apps, but the run must still
+# show as failed in systemd.
+if [ "${OS_FAILED:-no}" = yes ]; then
+    log FAIL "requested steps done, OS update failed on at least one node"
+    log INFO "===== run end ====="
+    exit 1
+fi
 log OK "requested steps done"
 log INFO "===== run end ====="
