@@ -195,6 +195,15 @@ IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned in
 [ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
 log OK "running on cluster leader"
 
+# With a subscription, NS8's own automatic updates (apply-updates) own this
+# job; running both would race on the same actions and dnf lock.
+SUBSCRIPTION=$(api_cli_silent get-subscription) || die "get-subscription failed"
+if jq -e '.subscription != null' <<<"$SUBSCRIPTION" >/dev/null; then
+    log OK "subscription found, updates are handled by NS8 automatic updates, nothing to do"
+    log INFO "===== run end ====="
+    exit 0
+fi
+
 # Order matches NS8's own automatic updates (cluster/bin/apply-updates):
 # OS packages first, then core, then apps.
 
