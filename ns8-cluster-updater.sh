@@ -124,8 +124,26 @@ sys.exit(response["exit_code"])
 ' "$agent_id" "$action" "$data"
 }
 
+managed_view_read() {
+    # update-core and update-modules switch to the "managed" repository view
+    # when the task has no user (as here), while the list-core-modules and
+    # list-updates actions read the "latest" view. With a subscription the
+    # managed view lags behind, so the pre-check must read the same view as
+    # the update actions. Without a subscription both views are the same.
+    runagent python3 -c '
+import sys, json
+import agent, cluster.modules
+cluster.modules.select_repo_view("managed")
+rdb = agent.redis_connect(privileged=True)
+if sys.argv[1] == "core":
+    json.dump(cluster.modules.list_core_modules(rdb), sys.stdout)
+else:
+    json.dump(cluster.modules.list_updates(rdb, skip_core_modules=True), sys.stdout)
+' "$1"
+}
+
 snapshot_core_modules() {
-    api_cli_silent list-core-modules | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
+    managed_view_read core | jq -c '[.[] | .instances[] | {id, version, update, node: .node_id}]'
 }
 
 snapshot_installed_modules() {
@@ -227,7 +245,7 @@ if [ "$DO_CORE" = yes ]; then
 fi
 
 if [ "$DO_MODULES" = yes ]; then
-    PENDING=$(api_cli_silent list-updates) || die "list-updates failed"
+    PENDING=$(managed_view_read updates) || die "list-updates failed"
     dump_json "list-updates (before)" "$PENDING"
     PENDING_COUNT=$(jq 'length' <<<"$PENDING") || die "list-updates returned invalid data"
     if [ "$PENDING_COUNT" -gt 0 ]; then
@@ -236,7 +254,7 @@ if [ "$DO_MODULES" = yes ]; then
             || die "modules update failed"
         MODULES_AFTER=$(snapshot_installed_modules) || die "failed to fetch installed modules after update"
         log_version_diff "app instances" "$MODULES_BEFORE" "$MODULES_AFTER"
-        REMAINING=$(api_cli_silent list-updates) || die "list-updates failed after update-modules"
+        REMAINING=$(managed_view_read updates) || die "list-updates failed after update-modules"
         dump_json "list-updates (after)" "$REMAINING"
         REMAINING_COUNT=$(jq 'length' <<<"$REMAINING") || die "list-updates returned invalid data"
         if [ "$REMAINING_COUNT" -eq 0 ]; then

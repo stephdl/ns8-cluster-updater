@@ -65,6 +65,14 @@ Only Rocky-like nodes (Rocky Linux, AlmaLinux) are supported. The node OS
 comes from `cluster/list-nodes`. Debian and Ubuntu nodes get a warning and
 are skipped: update them by hand.
 
+### Managed repository view
+
+`update-core` and `update-modules` read the repository "managed" view
+when they are not started by a user, as with NS8's own automatic
+updates. With a subscription, that view gets new versions later than
+the "latest" view shown in the UI. The pre-checks read the managed view
+too, so the script skips an update the actions would not apply.
+
 ### Reboot detection
 
 The script never reboots. For the leader, it runs `needs-restarting -r`
