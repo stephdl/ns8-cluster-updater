@@ -31,7 +31,7 @@ install the script with its systemd units:
 
 ```
 cd "$(mktemp -d)"
-url=https://github.com/stephdl/ns8-cluster-updater/releases/download/1.0.0
+url=https://github.com/stephdl/ns8-cluster-updater/releases/download/1.0.1
 for f in ns8-cluster-updater.sh ns8-cluster-updater.service ns8-cluster-updater.timer SHA256SUMS; do
     curl -fsSLO "$url/$f"
 done
