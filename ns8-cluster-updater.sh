@@ -186,6 +186,12 @@ log_version_diff() {
 [ "$(id -u)" -eq 0 ] || die "must run as root"
 command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 
+# Stop a manual run and a timer run from overlapping. The kernel releases
+# the lock when the process exits, even if killed. /run is root-only and
+# never cleaned while the system runs, unlike /tmp.
+exec 9>/run/ns8-cluster-updater.lock
+flock -n 9 || die "another ns8-cluster-updater run is in progress"
+
 log INFO "===== run start ====="
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
 

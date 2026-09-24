@@ -41,6 +41,8 @@ systemctl daemon-reload
 - `root`, on the cluster leader (checks `get-cluster-status .leader`).
 - `runagent` and `jq`.
 - No SSH between nodes: OS updates run as NS8 `update-os` node tasks.
+- Only one run at a time: a lock on `/run/ns8-cluster-updater.lock` makes
+  a second run, for example a manual one while the timer runs, exit 1.
 
 ## Usage
 
