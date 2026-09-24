@@ -15,14 +15,14 @@ DO_OS=no
 
 usage() {
     cat <<'EOF'
-Usage: ns8-cluster-updater.sh [--core] [--modules] [--os-safe] [--all] [-h|--help]
+Usage: ns8-cluster-updater.sh [--core] [--modules] [--os] [--all] [-h|--help]
 
   --core       update NS8 core on all cluster nodes
   --modules    update all NS8 app instances (all nodes)
-  --os-safe    update OS packages of Rocky Linux nodes with NS8's update-os
+  --os         update OS packages of Rocky Linux nodes with NS8's update-os
                node action (ns-baseos+ns-appstream only); other nodes are
                skipped
-  --all        shortcut for --os-safe --core --modules (same order NS8's own
+  --all        shortcut for --os --core --modules (same order NS8's own
                automatic updates use: OS, then core, then apps)
   -h, --help   show this help and exit
 
@@ -43,8 +43,7 @@ for arg in "$@"; do
     case "$arg" in
         --core) DO_CORE=yes ;;
         --modules) DO_MODULES=yes ;;
-        --os-safe) DO_OS=yes ;;
-        --os-full) echo "--os-full was removed, use --os-safe" >&2; exit 1 ;;
+        --os) DO_OS=yes ;;
         --all) DO_OS=yes; DO_CORE=yes; DO_MODULES=yes ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage; exit 1 ;;
@@ -210,6 +209,7 @@ fi
 
 if [ "$DO_OS" = yes ]; then
     REBOOT_LOCAL=no
+    LOCAL_UPDATED=no
     OS_FAILED=no
     # update-os only works with the ns-baseos and ns-appstream repositories,
     # which the NS8 installer creates on Rocky Linux only: on any other OS it
@@ -244,16 +244,22 @@ if [ "$DO_OS" = yes ]; then
             OS_FAILED=yes
             continue
         fi
-        [ "$LOCAL" = "true" ] && local_reboot_needed && REBOOT_LOCAL=yes
+        if [ "$LOCAL" = "true" ]; then
+            LOCAL_UPDATED=yes
+            local_reboot_needed && REBOOT_LOCAL=yes
+        fi
     done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local, .hostname] | @tsv')
 
-    log INFO "reboot needed on this node: $REBOOT_LOCAL"
-    if [ "$REBOOT_LOCAL" = yes ]; then
+    if [ "$LOCAL_UPDATED" != yes ]; then
+        log INFO "this node got no OS update, reboot state not checked, check updated nodes with needs-restarting -r"
+    elif [ "$REBOOT_LOCAL" = yes ]; then
+        log INFO "reboot needed on this node: yes"
         log WARN "reboot this node manually, script does not reboot"
         # update-os does not report reboot state, but every updated node got
         # the same packages from the same repositories in this run.
         log WARN "other updated nodes most likely need a reboot too, check each one with needs-restarting -r"
     else
+        log INFO "reboot needed on this node: no"
         log INFO "reboot state of other nodes is not reported, check them with needs-restarting -r"
     fi
 fi
