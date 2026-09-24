@@ -42,7 +42,7 @@ systemctl daemon-reload
 ```
 
 Run the same commands again to update. For a given version, replace
-`latest/download` with `download/v1.0.0`. The version shows at the start of
+`latest/download` with `download/1.0.0`. The version shows at the start of
 every run.
 
 ## Requirements

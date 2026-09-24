@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['[0-9]*']
 
 permissions:
   contents: write
@@ -22,5 +22,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --generate-notes \
-            ns8-cluster-updater.sh ns8-cluster-updater.service ns8-cluster-updater.timer SHA256SUMS
+          files=(ns8-cluster-updater.sh ns8-cluster-updater.service ns8-cluster-updater.timer SHA256SUMS)
+          # A release created from the GitHub UI already exists: attach the files to it.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber "${files[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" --generate-notes "${files[@]}"
+          fi
