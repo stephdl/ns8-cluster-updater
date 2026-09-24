@@ -240,8 +240,8 @@ if [ "$DO_OS" = yes ]; then
             log_lines INFO "$OS_LOG"
             log FAIL "OS update node $NID (exit $RC)"
             OS_FAILED=yes
-            continue
         fi
+        # Check even after a failure: dnf may have installed a kernel first.
         if [ "$LOCAL" = "true" ]; then
             LOCAL_UPDATED=yes
             local_reboot_needed && REBOOT_LOCAL=yes
