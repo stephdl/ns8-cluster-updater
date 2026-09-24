@@ -5,7 +5,7 @@ applications and OS packages, in one run or separately, with a pre-check that
 skips an update call entirely when nothing is pending.
 
 It targets clusters without a subscription: with one, it does nothing (see
-Subscription below). OS updates cover nodes with the NS8 repositories only.
+Subscription below). OS updates cover Rocky Linux nodes only.
 
 ## Why
 
@@ -52,7 +52,7 @@ ns8-cluster-updater.sh [--core] [--modules] [--os-safe] [--all] [-h|--help]
 |---------------|--------|
 | `--core`      | Update NS8 core on all cluster nodes, only if a newer version is available. |
 | `--modules`   | Update all NS8 app instances, on all nodes, only if at least one has a pending update. |
-| `--os-safe`   | Update OS packages with NS8's `update-os` node action, on nodes with the NS8 repositories. Other nodes are skipped. |
+| `--os-safe`   | Update OS packages of Rocky Linux nodes with NS8's `update-os` node action. Other nodes are skipped. |
 | `--all`       | Shortcut for `--os-safe --core --modules`, run in that order (same as NS8's own automatic updates). |
 | `-h`, `--help`| Show usage and exit. |
 
@@ -203,13 +203,30 @@ RandomizedDelaySec=1h
 systemctl list-timers ns8-cluster-updater.timer
 ```
 
+## Other OS updates
+
+The script only runs what NS8 supports. Any other OS update is up to you:
+set it up yourself on each node, and schedule it on a day this timer does
+not run (it runs Tuesday to Friday), so a package upgrade never overlaps a
+core update. Some ideas:
+
+- Rocky Linux with EPEL or another extra repository: `dnf-automatic` on
+  each node, with the repositories you want enabled. Exclude `podman*`
+  there (`excludepkgs=podman*` in the repository file), so a third-party
+  build never replaces the one NS8 is tested with.
+- AlmaLinux or RHEL: `dnf-automatic` on each node, with the distribution's
+  own repositories.
+- Debian: `unattended-upgrades`, or
+  [proxmox-updater](https://github.com/stephdl/proxmox-updater) for a full
+  upgrade.
+
+Whatever you use, reboot the node yourself when a new kernel is
+installed.
+
 ## Known limitations
 
-- Only nodes with the NS8 repositories get OS updates. AlmaLinux, RHEL and
-  Debian nodes are skipped. Update them locally on each node, for example
-  with `dnf-automatic`, `unattended-upgrades` or
-  [proxmox-updater](https://github.com/stephdl/proxmox-updater), on a day
-  this timer does not run.
+- Only Rocky Linux nodes get OS updates, from `ns-baseos` and
+  `ns-appstream` only. For anything else, see Other OS updates below.
 - `--os-full` was removed. Updating from all enabled repos (for example
   EPEL) could pull a `podman` build NS8 was not tested with.
 - If NS8's native automatic updates are already enabled

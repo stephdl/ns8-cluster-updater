@@ -19,9 +19,9 @@ Usage: ns8-cluster-updater.sh [--core] [--modules] [--os-safe] [--all] [-h|--hel
 
   --core       update NS8 core on all cluster nodes
   --modules    update all NS8 app instances (all nodes)
-  --os-safe    update OS packages with NS8's update-os node action
-               (ns-baseos+ns-appstream only), on nodes that have those
-               repositories; other nodes are skipped
+  --os-safe    update OS packages of Rocky Linux nodes with NS8's update-os
+               node action (ns-baseos+ns-appstream only); other nodes are
+               skipped
   --all        shortcut for --os-safe --core --modules (same order NS8's own
                automatic updates use: OS, then core, then apps)
   -h, --help   show this help and exit
