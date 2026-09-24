@@ -225,6 +225,7 @@ if [ "$DO_OS" = yes ]; then
                 ;;
         esac
         log STEP "OS update on node $NID ($HOSTNAME, $OS_NAME)"
+        log INFO "please wait, dnf output shows when node $NID is done (live: journalctl -f -u agent@node on node $NID)"
         # The task returns the dnf output only in its stderr stream: show it
         # on success too, as the old local dnf run did.
         if OS_LOG=$(TASK_STDERR=always api_task_silent "node/$NID" update-os 2>&1 >/dev/null); then
