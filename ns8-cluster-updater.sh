@@ -184,10 +184,19 @@ flock -n 9 || die "another ns8-cluster-updater run is in progress"
 log INFO "===== run start ====="
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
 
+# Check the role locally: a worker can't submit cluster tasks. Exit 0, as
+# the script may be installed on every node for leader failover.
+IS_LEADER=$(runagent python3 -c '
+import os, agent
+print(agent.redis_connect().hget("cluster/environment", "NODE_ID") == os.environ["NODE_ID"])
+') || die "cannot read the cluster leader from Redis"
+if [ "$IS_LEADER" != "True" ]; then
+    log FAIL "this node is not the cluster leader, run the script on the leader, nothing done"
+    log INFO "===== run end ====="
+    exit 0
+fi
 STATUS=$(api_cli_silent get-cluster-status) || die "get-cluster-status failed"
 dump_json "get-cluster-status" "$STATUS"
-IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned invalid data"
-[ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
 log OK "running on cluster leader"
 
 # NS8 automatic updates own subscribed clusters.

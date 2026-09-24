@@ -38,7 +38,10 @@ systemctl daemon-reload
 
 ## Requirements
 
-- `root`, on the cluster leader (checks `get-cluster-status .leader`).
+- `root`, on the cluster leader (read from the local Redis replica). On
+  another node it logs an error and exits 0 without doing anything, so the
+  script can be installed on every node and keeps working after a leader
+  change.
 - `runagent` and `jq`.
 - No SSH between nodes: OS updates run as NS8 `update-os` node tasks.
 - Only one run at a time: a lock on `/run/ns8-cluster-updater.lock` makes
