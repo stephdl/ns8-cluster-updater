@@ -26,8 +26,8 @@ API directly for this. Failures still show up normally.
 Install it on the cluster leader, as root. The script updates every node
 from there: nothing is needed on the other nodes.
 
-The commands below download version 1.0.0 from its GitHub release, check
-the files, and install the script with its systemd units:
+The commands below download the current release, check the files, and
+install the script with its systemd units:
 
 ```
 cd "$(mktemp -d)"
@@ -47,8 +47,9 @@ each downloaded file matches it, so a truncated or corrupted download
 stops the install. It comes from the same release as the files, so it
 does not protect against a tampered release.
 
-To update, run the same commands with the new version number in `url`.
-The version shows at the start of every run.
+The release workflow updates the version in `url` at each release. To
+update, run the same commands again. The version shows at the start of
+every run.
 
 ## Requirements
 

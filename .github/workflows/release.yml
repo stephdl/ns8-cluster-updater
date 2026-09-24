@@ -29,3 +29,15 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --generate-notes "${files[@]}"
           fi
+      - name: Point the README install URL to this release
+        run: |
+          # Drop the stamped script: only the README goes to main.
+          git reset --hard
+          git fetch origin main
+          git checkout -B main origin/main
+          sed -i -E "s#(releases/download/)[^/[:space:]]+#\1${GITHUB_REF_NAME}#" README.md
+          git diff --quiet README.md && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: install ${GITHUB_REF_NAME}" README.md
+          git push origin main
