@@ -216,15 +216,14 @@ if [ "$DO_OS" = yes ]; then
     # update-os needs ns-baseos/ns-appstream, created by the installer on
     # Rocky Linux only. os_release comes from the metrics module.
     NODES_OS=$(api_cli_silent list-nodes | jq -c '[.nodes[] | {(.node_id | tostring): .os_release.name}] | add // {}') \
-        || { log WARN "list-nodes failed, OS of nodes unknown"; NODES_OS='{}'; }
+        || die "list-nodes failed, cannot tell which nodes run Rocky Linux"
+    # Stop before any update: skipping silently would leave the OS stale.
+    UNKNOWN_OS=$(jq -r --argjson os "$NODES_OS" '[.nodes[].id | tostring | select(($os[.] // "") == "")] | join(",")' <<<"$STATUS")
+    [ -z "$UNKNOWN_OS" ] || die "OS unknown on node(s) $UNKNOWN_OS, metrics unavailable, check the metrics module"
     while IFS=$'\t' read -r NID LOCAL HOSTNAME; do
         OS_NAME=$(jq -r --arg id "$NID" '.[$id] // ""' <<<"$NODES_OS")
         case "$OS_NAME" in
             Rocky*) ;;
-            "")
-                log WARN "OS update node $NID ($HOSTNAME): OS unknown, metrics unavailable, skipped"
-                continue
-                ;;
             *)
                 log WARN "OS update node $NID ($HOSTNAME, $OS_NAME): no NS8 repositories on this OS, update it locally, skipped"
                 continue
