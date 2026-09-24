@@ -87,8 +87,8 @@ it only on Rocky Linux nodes, and skips every other node with a warning
 (see Known limitations).
 
 The node OS comes from `cluster/list-nodes`, which reads it from the
-metrics module. If it is missing, the node is skipped with a separate
-"OS unknown, metrics unavailable" warning: check the metrics module.
+metrics module. If it is missing for any node, or `list-nodes` fails, the
+script stops with an error before any update: check the metrics module.
 
 A failed OS update on one node does not stop the other steps. Core and apps
 are still updated, then the script exits 1 so the systemd run shows as
@@ -110,7 +110,7 @@ that view matches "latest" on the community repository.
 The script never reboots. When the leader got an OS update, it runs
 `needs-restarting -r` there (or compares `uname -r` with the newest
 `kernel-core` when dnf-utils is missing) and reports whether a reboot is
-needed. When the leader was skipped (not Rocky Linux, or OS unknown), it
+needed. When the leader was skipped (not Rocky Linux), it
 says the reboot state was not checked. `update-os` does not
 report it for the other nodes. When the leader needs a reboot, the script
 warns that the other updated nodes most likely need one too: they got the
