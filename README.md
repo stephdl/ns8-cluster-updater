@@ -226,7 +226,7 @@ installed.
 ## Known limitations
 
 - Only Rocky Linux nodes get OS updates, from `ns-baseos` and
-  `ns-appstream` only. For anything else, see Other OS updates below.
+  `ns-appstream` only. For anything else, see Other OS updates above.
 - If NS8's native automatic updates are already enabled
   (`set-automatic-updates --data '{"apply_updates_is_active": true}'`), they
   run independently of this script, no coordination between them.
