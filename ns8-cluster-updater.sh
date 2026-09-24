@@ -112,13 +112,14 @@ api_task_silent() {
     # (some actions, e.g. list-updates, reject an object as input).
     local data="${3:-null}"
     runagent python3 -c '
-import sys, json
+import os, re, sys, json
 import agent, agent.tasks
 agent_id, action, data = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
 extra = {"title": f"{agent_id}/{action}", "description": "ns8-cluster-updater", "isNotificationHidden": True}
 response = agent.tasks.run(agent_id, action, data, extra=extra, endpoint="redis://cluster-leader")
-if response["exit_code"] != 0:
-    print(response.get("error", ""), file=sys.stderr, end="")
+if response["exit_code"] != 0 or os.getenv("TASK_STDERR") == "always":
+    # Drop the journald priority prefix of each line, log_lines adds ours.
+    print(re.sub(r"(?m)^<[0-7]>", "", response.get("error", "")), file=sys.stderr, end="")
 print(json.dumps(response["output"]))
 sys.exit(response["exit_code"])
 ' "$agent_id" "$action" "$data"
@@ -224,10 +225,16 @@ if [ "$DO_OS" = yes ]; then
                 ;;
         esac
         log STEP "OS update on node $NID ($HOSTNAME, $OS_NAME)"
-        if api_task_silent "node/$NID" update-os >/dev/null; then
+        log INFO "please wait, dnf output shows when node $NID is done (live: journalctl -f -u agent@node on node $NID)"
+        # The task returns the dnf output only in its stderr stream: show it
+        # on success too, as the old local dnf run did.
+        if OS_LOG=$(TASK_STDERR=always api_task_silent "node/$NID" update-os 2>&1 >/dev/null); then
+            log_lines INFO "$OS_LOG"
             log OK "OS update node $NID"
         else
-            log FAIL "OS update node $NID (exit $?)"
+            RC=$?
+            log_lines INFO "$OS_LOG"
+            log FAIL "OS update node $NID (exit $RC)"
             OS_FAILED=yes
             continue
         fi

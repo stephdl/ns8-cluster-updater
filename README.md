@@ -63,6 +63,14 @@ No option: prints usage, does nothing.
 `--os-safe` runs NS8's own `update-os` action on each node, one node at a
 time. That action runs `dnf update` restricted to `ns-baseos` and
 `ns-appstream`, the same repositories NS8 automatic updates use.
+The dnf output of each node is printed once that node is done, on
+success too. A long update can keep the run silent for minutes: the task
+returns its output only at the end. To follow it live, open a shell on
+that node and run:
+
+```
+journalctl -f -u agent@node
+```
 
 Only Rocky-like nodes (Rocky Linux, AlmaLinux) are supported. The node OS
 comes from `cluster/list-nodes`. Debian and Ubuntu nodes get a warning and
