@@ -78,65 +78,6 @@ ns8-cluster-updater.sh [--core] [--modules] [--os] [--all] [-h|--help]
 
 No option: prints usage, does nothing.
 
-### OS updates
-
-`--os` runs NS8's own `update-os` action on each node, one node at a
-time. That action runs `dnf update` restricted to `ns-baseos` and
-`ns-appstream`, the same repositories NS8 automatic updates use.
-The dnf output of each node is printed once that node is done, on
-success too. A long update can keep the run silent for minutes: the task
-returns its output only at the end. To follow it live, open a shell on
-that node and run:
-
-```
-journalctl -f -u agent@node
-```
-
-`update-os` needs the `ns-baseos` and `ns-appstream` repositories. The NS8
-installer creates them on Rocky Linux only. On other EL9 systems (AlmaLinux,
-RHEL) the action fails, and on Debian it does nothing. So the script runs
-it only on Rocky Linux nodes, and skips every other node with a warning
-(see Known limitations).
-
-The node OS comes from `cluster/list-nodes`, which reads it from the
-metrics module. If it is missing for any node, or `list-nodes` fails, the
-script stops with an error before any update: check the metrics module.
-
-A failed OS update on one node does not stop the other steps. Core and apps
-are still updated, then the script exits 1 so the systemd run shows as
-failed.
-
-### Subscription
-
-With a subscription, the script logs a notice and exits 0 without doing
-anything. NS8's own automatic updates handle subscribed clusters, and
-running both would race on the same actions and on the dnf lock. The
-script targets clusters without a subscription.
-
-The pre-checks still read the repository "managed" view, the same view
-`update-core` and `update-modules` use when no user starts them. Today
-that view matches "latest" on the community repository.
-
-### Reboot detection
-
-The script never reboots. When the leader got an OS update, it runs
-`needs-restarting -r` there (or compares `uname -r` with the newest
-`kernel-core` when dnf-utils is missing) and reports whether a reboot is
-needed. When the leader was skipped (not Rocky Linux), it
-says the reboot state was not checked. `update-os` does not
-report it for the other nodes. When the leader needs a reboot, the script
-warns that the other updated nodes most likely need one too: they got the
-same packages from the same repositories in the same run. Check each one
-with `needs-restarting -r`.
-
-## Logging
-
-Every message goes to stderr with a systemd journal priority prefix
-(`<3>` error, `<4>` warning, `<5>` notice, `<6>` info, same convention
-NS8 core itself uses in `agent/__init__.py`'s `SD_*` constants). Run
-interactively, they print straight to the terminal; run under the shipped
-service, journald picks up the prefix and stores the right severity.
-
 ## Scheduling
 
 ```
@@ -224,6 +165,67 @@ RandomizedDelaySec=1h
 ```
 systemctl list-timers ns8-cluster-updater.timer
 ```
+
+## How it works
+
+### OS updates
+
+`--os` runs NS8's own `update-os` action on each node, one node at a
+time. That action runs `dnf update` restricted to `ns-baseos` and
+`ns-appstream`, the same repositories NS8 automatic updates use.
+The dnf output of each node is printed once that node is done, on
+success too. A long update can keep the run silent for minutes: the task
+returns its output only at the end. To follow it live, open a shell on
+that node and run:
+
+```
+journalctl -f -u agent@node
+```
+
+`update-os` needs the `ns-baseos` and `ns-appstream` repositories. The NS8
+installer creates them on Rocky Linux only. On other EL9 systems (AlmaLinux,
+RHEL) the action fails, and on Debian it does nothing. So the script runs
+it only on Rocky Linux nodes, and skips every other node with a warning
+(see Known limitations).
+
+The node OS comes from `cluster/list-nodes`, which reads it from the
+metrics module. If it is missing for any node, or `list-nodes` fails, the
+script stops with an error before any update: check the metrics module.
+
+A failed OS update on one node does not stop the other steps. Core and apps
+are still updated, then the script exits 1 so the systemd run shows as
+failed.
+
+### Subscription
+
+With a subscription, the script logs a notice and exits 0 without doing
+anything. NS8's own automatic updates handle subscribed clusters, and
+running both would race on the same actions and on the dnf lock. The
+script targets clusters without a subscription.
+
+The pre-checks still read the repository "managed" view, the same view
+`update-core` and `update-modules` use when no user starts them. Today
+that view matches "latest" on the community repository.
+
+### Reboot detection
+
+The script never reboots. When the leader got an OS update, it runs
+`needs-restarting -r` there (or compares `uname -r` with the newest
+`kernel-core` when dnf-utils is missing) and reports whether a reboot is
+needed. When the leader was skipped (not Rocky Linux), it
+says the reboot state was not checked. `update-os` does not
+report it for the other nodes. When the leader needs a reboot, the script
+warns that the other updated nodes most likely need one too: they got the
+same packages from the same repositories in the same run. Check each one
+with `needs-restarting -r`.
+
+### Logging
+
+Every message goes to stderr with a systemd journal priority prefix
+(`<3>` error, `<4>` warning, `<5>` notice, `<6>` info, same convention
+NS8 core itself uses in `agent/__init__.py`'s `SD_*` constants). Run
+interactively, they print straight to the terminal; run under the shipped
+service, journald picks up the prefix and stores the right severity.
 
 ## Other OS updates
 
