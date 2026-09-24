@@ -97,8 +97,11 @@ that view matches "latest" on the community repository.
 
 The script never reboots. For the leader, it runs `needs-restarting -r`
 (or compares `uname -r` with the newest `kernel-core` when dnf-utils is
-missing) and reports whether a reboot is needed. `update-os` does not report it, so
-check the other nodes by hand with `needs-restarting -r`.
+missing) and reports whether a reboot is needed. `update-os` does not
+report it for the other nodes. When the leader needs a reboot, the script
+warns that the other Rocky nodes most likely need one too: they got the
+same packages from the same repositories in the same run. Check each one
+with `needs-restarting -r`.
 
 ## Logging
 

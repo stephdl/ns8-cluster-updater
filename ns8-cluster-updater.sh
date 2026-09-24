@@ -242,8 +242,14 @@ if [ "$DO_OS" = yes ]; then
     done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local, .hostname] | @tsv')
 
     log INFO "reboot needed on this node: $REBOOT_LOCAL"
-    [ "$REBOOT_LOCAL" = yes ] && log WARN "reboot this node manually, script does not reboot"
-    log INFO "reboot state of other nodes is not reported, check them with needs-restarting -r"
+    if [ "$REBOOT_LOCAL" = yes ]; then
+        log WARN "reboot this node manually, script does not reboot"
+        # update-os does not report reboot state, but every Rocky node got
+        # the same packages from the same repositories in this run.
+        log WARN "other Rocky nodes most likely need a reboot too, check each one with needs-restarting -r"
+    else
+        log INFO "reboot state of other nodes is not reported, check them with needs-restarting -r"
+    fi
 fi
 
 if [ "$DO_CORE" = yes ]; then
