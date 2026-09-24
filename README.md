@@ -227,8 +227,6 @@ installed.
 
 - Only Rocky Linux nodes get OS updates, from `ns-baseos` and
   `ns-appstream` only. For anything else, see Other OS updates below.
-- `--os-full` was removed. Updating from all enabled repos (for example
-  EPEL) could pull a `podman` build NS8 was not tested with.
 - If NS8's native automatic updates are already enabled
   (`set-automatic-updates --data '{"apply_updates_is_active": true}'`), they
   run independently of this script, no coordination between them.
