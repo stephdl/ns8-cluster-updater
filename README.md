@@ -5,7 +5,7 @@ applications and OS packages, in one run or separately, with a pre-check that
 skips an update call entirely when nothing is pending.
 
 It targets clusters without a subscription: with one, it does nothing (see
-Subscription below). OS updates cover Rocky-like nodes only.
+Subscription below). OS updates cover nodes with the NS8 repositories only.
 
 ## Why
 
@@ -52,7 +52,7 @@ ns8-cluster-updater.sh [--core] [--modules] [--os-safe] [--all] [-h|--help]
 |---------------|--------|
 | `--core`      | Update NS8 core on all cluster nodes, only if a newer version is available. |
 | `--modules`   | Update all NS8 app instances, on all nodes, only if at least one has a pending update. |
-| `--os-safe`   | Update OS packages of Rocky-like nodes with NS8's `update-os` node action. Debian nodes are skipped. |
+| `--os-safe`   | Update OS packages with NS8's `update-os` node action, on nodes with the NS8 repositories. Other nodes are skipped. |
 | `--all`       | Shortcut for `--os-safe --core --modules`, run in that order (same as NS8's own automatic updates). |
 | `-h`, `--help`| Show usage and exit. |
 
@@ -72,11 +72,15 @@ that node and run:
 journalctl -f -u agent@node
 ```
 
-Only Rocky-like nodes (Rocky Linux, AlmaLinux) are supported. The node OS
-comes from `cluster/list-nodes`. Debian and Ubuntu nodes get a warning and
-are skipped (see Known limitations). If the OS is unknown, for example when
-metrics are missing, `update-os` still runs: it does nothing on a node
-without dnf.
+`update-os` needs the `ns-baseos` and `ns-appstream` repositories. The NS8
+installer creates them on Rocky Linux only. On other EL9 systems (AlmaLinux,
+RHEL) the action fails, and on Debian it does nothing. So the script runs
+it only on Rocky Linux nodes, and skips every other node with a warning
+(see Known limitations).
+
+The node OS comes from `cluster/list-nodes`, which reads it from the
+metrics module. If it is missing, the node is skipped with a separate
+"OS unknown, metrics unavailable" warning: check the metrics module.
 
 A failed OS update on one node does not stop the other steps. Core and apps
 are still updated, then the script exits 1 so the systemd run shows as
@@ -99,7 +103,7 @@ The script never reboots. For the leader, it runs `needs-restarting -r`
 (or compares `uname -r` with the newest `kernel-core` when dnf-utils is
 missing) and reports whether a reboot is needed. `update-os` does not
 report it for the other nodes. When the leader needs a reboot, the script
-warns that the other Rocky nodes most likely need one too: they got the
+warns that the other updated nodes most likely need one too: they got the
 same packages from the same repositories in the same run. Check each one
 with `needs-restarting -r`.
 
@@ -201,9 +205,9 @@ systemctl list-timers ns8-cluster-updater.timer
 
 ## Known limitations
 
-- Only Rocky-like nodes get OS updates. Debian and Ubuntu nodes are
-  skipped. Update them locally on each node, for example with
-  `unattended-upgrades` or
+- Only nodes with the NS8 repositories get OS updates. AlmaLinux, RHEL and
+  Debian nodes are skipped. Update them locally on each node, for example
+  with `dnf-automatic`, `unattended-upgrades` or
   [proxmox-updater](https://github.com/stephdl/proxmox-updater), on a day
   this timer does not run.
 - `--os-full` was removed. Updating from all enabled repos (for example

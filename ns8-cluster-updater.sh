@@ -19,9 +19,9 @@ Usage: ns8-cluster-updater.sh [--core] [--modules] [--os-safe] [--all] [-h|--hel
 
   --core       update NS8 core on all cluster nodes
   --modules    update all NS8 app instances (all nodes)
-  --os-safe    update OS packages of Rocky-like nodes with NS8's update-os
-               node action (ns-baseos+ns-appstream only); Debian nodes are
-               skipped
+  --os-safe    update OS packages with NS8's update-os node action
+               (ns-baseos+ns-appstream only), on nodes that have those
+               repositories; other nodes are skipped
   --all        shortcut for --os-safe --core --modules (same order NS8's own
                automatic updates use: OS, then core, then apps)
   -h, --help   show this help and exit
@@ -211,16 +211,22 @@ fi
 if [ "$DO_OS" = yes ]; then
     REBOOT_LOCAL=no
     OS_FAILED=no
-    # update-os exits 0 without doing anything on a node without dnf, so
-    # Debian nodes must be filtered out here. os_release comes from metrics:
-    # when it is missing, running update-os is still harmless.
+    # update-os only works with the ns-baseos and ns-appstream repositories,
+    # which the NS8 installer creates on Rocky Linux only: on any other OS it
+    # fails (EL9 clones) or does nothing (Debian). os_release comes from the
+    # metrics module.
     NODES_OS=$(api_cli_silent list-nodes | jq -c '[.nodes[] | {(.node_id | tostring): .os_release.name}] | add // {}') \
         || { log WARN "list-nodes failed, OS of nodes unknown"; NODES_OS='{}'; }
     while IFS=$'\t' read -r NID LOCAL HOSTNAME; do
-        OS_NAME=$(jq -r --arg id "$NID" '.[$id] // "unknown OS"' <<<"$NODES_OS")
+        OS_NAME=$(jq -r --arg id "$NID" '.[$id] // ""' <<<"$NODES_OS")
         case "$OS_NAME" in
-            Debian*|Ubuntu*)
-                log WARN "OS update node $NID ($HOSTNAME, $OS_NAME): not supported, skipped"
+            Rocky*) ;;
+            "")
+                log WARN "OS update node $NID ($HOSTNAME): OS unknown, metrics unavailable, skipped"
+                continue
+                ;;
+            *)
+                log WARN "OS update node $NID ($HOSTNAME, $OS_NAME): no NS8 repositories on this OS, update it locally, skipped"
                 continue
                 ;;
         esac
@@ -244,9 +250,9 @@ if [ "$DO_OS" = yes ]; then
     log INFO "reboot needed on this node: $REBOOT_LOCAL"
     if [ "$REBOOT_LOCAL" = yes ]; then
         log WARN "reboot this node manually, script does not reboot"
-        # update-os does not report reboot state, but every Rocky node got
+        # update-os does not report reboot state, but every updated node got
         # the same packages from the same repositories in this run.
-        log WARN "other Rocky nodes most likely need a reboot too, check each one with needs-restarting -r"
+        log WARN "other updated nodes most likely need a reboot too, check each one with needs-restarting -r"
     else
         log INFO "reboot state of other nodes is not reported, check them with needs-restarting -r"
     fi
