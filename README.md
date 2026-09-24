@@ -26,12 +26,12 @@ API directly for this. Failures still show up normally.
 Install it on the cluster leader, as root. The script updates every node
 from there: nothing is needed on the other nodes.
 
-The commands below download the latest release, check the files against
-its `SHA256SUMS`, and install the script with its systemd units:
+The commands below download version 1.0.0 from its GitHub release, check
+the files, and install the script with its systemd units:
 
 ```
 cd "$(mktemp -d)"
-url=https://github.com/stephdl/ns8-cluster-updater/releases/latest/download
+url=https://github.com/stephdl/ns8-cluster-updater/releases/download/1.0.0
 for f in ns8-cluster-updater.sh ns8-cluster-updater.service ns8-cluster-updater.timer SHA256SUMS; do
     curl -fsSLO "$url/$f"
 done
@@ -41,9 +41,14 @@ install -m 644 ns8-cluster-updater.service ns8-cluster-updater.timer /etc/system
 systemctl daemon-reload
 ```
 
-Run the same commands again to update. For a given version, replace
-`latest/download` with `download/1.0.0`. The version shows at the start of
-every run.
+`SHA256SUMS` is built by the release workflow when the tag is pushed, and
+attached to the release with the other files. `sha256sum -c` checks that
+each downloaded file matches it, so a truncated or corrupted download
+stops the install. It comes from the same release as the files, so it
+does not protect against a tampered release.
+
+To update, run the same commands with the new version number in `url`.
+The version shows at the start of every run.
 
 ## Requirements
 
