@@ -8,6 +8,9 @@ SD_WARNING="<4>"
 SD_NOTICE="<5>"
 SD_INFO="<6>"
 
+# Set to the tag by the release workflow.
+VERSION=dev
+
 DO_CORE=no
 DO_MODULES=no
 DO_OS=no
@@ -181,7 +184,7 @@ command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 exec 9>/run/ns8-cluster-updater.lock
 flock -n 9 || die "another ns8-cluster-updater run is in progress"
 
-log INFO "===== run start ====="
+log INFO "===== run start (ns8-cluster-updater $VERSION) ====="
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
 
 # Check the role locally: a worker can't submit cluster tasks. Exit 0, as

@@ -26,18 +26,24 @@ API directly for this. Failures still show up normally.
 Install it on the cluster leader, as root. The script updates every node
 from there: nothing is needed on the other nodes.
 
-```
-curl -o /usr/local/sbin/ns8-cluster-updater.sh https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.sh
-chmod +x /usr/local/sbin/ns8-cluster-updater.sh
-```
-
-For the systemd timer (see Scheduling below), also grab the unit files:
+The commands below download the latest release, check the files against
+its `SHA256SUMS`, and install the script with its systemd units:
 
 ```
-curl -o /etc/systemd/system/ns8-cluster-updater.service https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.service
-curl -o /etc/systemd/system/ns8-cluster-updater.timer https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.timer
+cd "$(mktemp -d)"
+url=https://github.com/stephdl/ns8-cluster-updater/releases/latest/download
+for f in ns8-cluster-updater.sh ns8-cluster-updater.service ns8-cluster-updater.timer SHA256SUMS; do
+    curl -fsSLO "$url/$f"
+done
+sha256sum -c SHA256SUMS
+install -m 755 ns8-cluster-updater.sh /usr/local/sbin/
+install -m 644 ns8-cluster-updater.service ns8-cluster-updater.timer /etc/systemd/system/
 systemctl daemon-reload
 ```
+
+Run the same commands again to update. For a given version, replace
+`latest/download` with `download/v1.0.0`. The version shows at the start of
+every run.
 
 ## Requirements
 
