@@ -2,8 +2,7 @@
 
 set -uo pipefail
 
-# systemd journal priority prefixes (see systemd.journal-fields(7) and
-# agent/__init__.py's SD_* constants), same convention NS8 core itself uses.
+# journald priority prefixes, same as NS8 agent SD_* constants.
 SD_ERR="<3>"
 SD_WARNING="<4>"
 SD_NOTICE="<5>"
@@ -61,10 +60,7 @@ log() {
     printf '%s%s: %s\n' "$prefix" "$level" "$msg" >&2
 }
 
-# Prints multi-line text one log() call per line, so every physical line
-# always starts with our own controlled prefix. Without this, a line from
-# untrusted content (e.g. an app's error message) starting with "<3>" or
-# similar would be read by journald as a forged priority on its own entry.
+# One log() per line, so a line starting with "<3>" can't forge a priority.
 log_lines() {
     local level="$1" text="$2"
     [ -n "$text" ] || return 0
@@ -103,12 +99,9 @@ api_cli_silent() {
 }
 
 api_task_silent() {
-    # Same contract as `api-cli run <action> --data <json>`, but submits with
-    # extra.isNotificationHidden so it doesn't toast in every admin's UI.
-    # api-cli itself hardcodes that flag to false with no way to override it.
+    # Like api-cli, but with isNotificationHidden, which api-cli can't set.
     local agent_id="$1" action="$2"
-    # Match api-cli's own default: no data means JSON null, not "{}"
-    # (some actions, e.g. list-updates, reject an object as input).
+    # Default to null like api-cli: some actions reject "{}".
     local data="${3:-null}"
     runagent python3 -c '
 import os, re, sys, json
@@ -117,7 +110,7 @@ agent_id, action, data = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
 extra = {"title": f"{agent_id}/{action}", "description": "ns8-cluster-updater", "isNotificationHidden": True}
 response = agent.tasks.run(agent_id, action, data, extra=extra, endpoint="redis://cluster-leader")
 if response["exit_code"] != 0 or os.getenv("TASK_STDERR") == "always":
-    # Drop the journald priority prefix of each line, log_lines adds ours.
+    # Drop the agent prefix, log_lines adds ours.
     print(re.sub(r"(?m)^<[0-7]>", "", response.get("error", "")), file=sys.stderr, end="")
 print(json.dumps(response["output"]))
 sys.exit(response["exit_code"])
@@ -125,11 +118,8 @@ sys.exit(response["exit_code"])
 }
 
 managed_view_read() {
-    # update-core and update-modules switch to the "managed" repository view
-    # when the task has no user (as here), while the list-core-modules and
-    # list-updates actions read the "latest" view. With a subscription the
-    # managed view lags behind, so the pre-check must read the same view as
-    # the update actions. Without a subscription both views are the same.
+    # Update actions without a task user read the "managed" view, not
+    # "latest": check the same view they will apply.
     runagent python3 -c '
 import sys, json
 import agent, cluster.modules
@@ -155,7 +145,7 @@ local_reboot_needed() {
         ! needs-restarting -r >/dev/null 2>&1
         return
     fi
-    # needs-restarting comes from dnf-utils, which is not always installed.
+    # needs-restarting (dnf-utils) is not always installed.
     local latest
     latest=$(rpm -q --last kernel-core 2>/dev/null | head -1 | awk '{print $1}' | sed 's/^kernel-core-//')
     [ -n "$latest" ] && [ "$latest" != "$(uname -r)" ]
@@ -186,9 +176,8 @@ log_version_diff() {
 [ "$(id -u)" -eq 0 ] || die "must run as root"
 command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 
-# Stop a manual run and a timer run from overlapping. The kernel releases
-# the lock when the process exits, even if killed. /run is root-only and
-# never cleaned while the system runs, unlike /tmp.
+# One run at a time; released on exit, even if killed. /run, not /tmp:
+# root-only and never cleaned.
 exec 9>/run/ns8-cluster-updater.lock
 flock -n 9 || die "another ns8-cluster-updater run is in progress"
 
@@ -201,8 +190,7 @@ IS_LEADER=$(jq -r '.leader' <<<"$STATUS") || die "get-cluster-status returned in
 [ "$IS_LEADER" = "true" ] || die "this node is not the cluster leader, aborting"
 log OK "running on cluster leader"
 
-# With a subscription, NS8's own automatic updates (apply-updates) own this
-# job; running both would race on the same actions and dnf lock.
+# NS8 automatic updates own subscribed clusters.
 SUBSCRIPTION=$(api_cli_silent get-subscription) || die "get-subscription failed"
 if jq -e '.subscription != null' <<<"$SUBSCRIPTION" >/dev/null; then
     log OK "subscription found, updates are handled by NS8 automatic updates, nothing to do"
@@ -210,17 +198,14 @@ if jq -e '.subscription != null' <<<"$SUBSCRIPTION" >/dev/null; then
     exit 0
 fi
 
-# Order matches NS8's own automatic updates (cluster/bin/apply-updates):
-# OS packages first, then core, then apps.
+# Same order as NS8 apply-updates: OS, core, apps.
 
 if [ "$DO_OS" = yes ]; then
     REBOOT_LOCAL=no
     LOCAL_UPDATED=no
     OS_FAILED=no
-    # update-os only works with the ns-baseos and ns-appstream repositories,
-    # which the NS8 installer creates on Rocky Linux only: on any other OS it
-    # fails (EL9 clones) or does nothing (Debian). os_release comes from the
-    # metrics module.
+    # update-os needs ns-baseos/ns-appstream, created by the installer on
+    # Rocky Linux only. os_release comes from the metrics module.
     NODES_OS=$(api_cli_silent list-nodes | jq -c '[.nodes[] | {(.node_id | tostring): .os_release.name}] | add // {}') \
         || { log WARN "list-nodes failed, OS of nodes unknown"; NODES_OS='{}'; }
     while IFS=$'\t' read -r NID LOCAL HOSTNAME; do
@@ -238,8 +223,7 @@ if [ "$DO_OS" = yes ]; then
         esac
         log STEP "OS update on node $NID ($HOSTNAME, $OS_NAME)"
         log INFO "please wait, dnf output shows when node $NID is done (live: journalctl -f -u agent@node on node $NID)"
-        # The task returns the dnf output only in its stderr stream: show it
-        # on success too, as the old local dnf run did.
+        # dnf output comes back in the task stderr: show it on success too.
         if OS_LOG=$(TASK_STDERR=always api_task_silent "node/$NID" update-os 2>&1 >/dev/null); then
             log_lines INFO "$OS_LOG"
             log OK "OS update node $NID"
@@ -261,8 +245,7 @@ if [ "$DO_OS" = yes ]; then
     elif [ "$REBOOT_LOCAL" = yes ]; then
         log INFO "reboot needed on this node: yes"
         log WARN "reboot this node manually, script does not reboot"
-        # update-os does not report reboot state, but every updated node got
-        # the same packages from the same repositories in this run.
+        # Every updated node got the same packages in this run.
         log WARN "other updated nodes most likely need a reboot too, check each one with needs-restarting -r"
     else
         log INFO "reboot needed on this node: no"
@@ -309,8 +292,7 @@ if [ "$DO_MODULES" = yes ]; then
     fi
 fi
 
-# A failed OS update doesn't stop core and apps, but the run must still
-# show as failed in systemd.
+# OS failure doesn't stop core and apps, but must fail the run.
 if [ "${OS_FAILED:-no}" = yes ]; then
     log FAIL "requested steps done, OS update failed on at least one node"
     log INFO "===== run end ====="
