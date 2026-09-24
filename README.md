@@ -23,6 +23,9 @@ API directly for this. Failures still show up normally.
 
 ## Install
 
+Install it on the cluster leader, as root. The script updates every node
+from there: nothing is needed on the other nodes.
+
 ```
 curl -o /usr/local/sbin/ns8-cluster-updater.sh https://raw.githubusercontent.com/stephdl/ns8-cluster-updater/main/ns8-cluster-updater.sh
 chmod +x /usr/local/sbin/ns8-cluster-updater.sh
@@ -39,9 +42,9 @@ systemctl daemon-reload
 ## Requirements
 
 - `root`, on the cluster leader (read from the local Redis replica). On
-  another node it logs an error and exits 0 without doing anything, so the
-  script can be installed on every node and keeps working after a leader
-  change.
+  another node it logs an error and exits 0 without doing anything.
+- After a leader change, install it on the new leader. You can also install
+  it on every node beforehand: only the leader of the moment does the work.
 - `runagent` and `jq`.
 - No SSH between nodes: OS updates run as NS8 `update-os` node tasks.
 - Only one run at a time: a lock on `/run/ns8-cluster-updater.lock` makes
