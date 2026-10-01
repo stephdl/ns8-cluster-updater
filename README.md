@@ -212,6 +212,11 @@ cluster on the same minor release. When you are ready, run once with
 the script exits 1. A leader without dnf cannot do the lookup: Rocky
 workers are then skipped unless you pass `--os-allow-minor`.
 
+The lookup runs again right before each node is updated, since the mirror
+can publish a new minor while earlier nodes update. If the answer changes,
+the nodes left are not updated, so they stay on the same minor as the
+nodes already done.
+
 Rocky Linux has no long-term support per minor release. Once 9.9 is out,
 9.8 gets no more security fixes, so don't stay on the old minor for long.
 
@@ -270,6 +275,8 @@ installed.
 
 - Only Rocky Linux nodes get OS updates, from `ns-baseos` and
   `ns-appstream` only. For anything else, see Other OS updates above.
+- The release is checked right before each node update, not during it. A
+  new minor published while dnf runs on a node can still reach that node.
 - If NS8's native automatic updates are already enabled
   (`set-automatic-updates --data '{"apply_updates_is_active": true}'`), they
   run independently of this script, no coordination between them.

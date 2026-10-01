@@ -277,6 +277,18 @@ if [ "$DO_OS" = yes ]; then
                 continue
                 ;;
         esac
+        # The mirror can publish a new minor while earlier nodes update.
+        if [ "$OS_ALLOW_MINOR" = no ]; then
+            if ! RECHECK=$(rocky_release_candidate) || [ -z "$RECHECK" ]; then
+                log FAIL "cannot read the newest Rocky Linux release from ns-baseos, OS update stopped before node $NID"
+                OS_CHECK_FAILED=yes
+                break
+            elif [ "$RECHECK" != "$ROCKY_CANDIDATE" ]; then
+                log WARN "OS update stopped before node $NID: Rocky Linux $RECHECK appeared during the run, nodes left are still on $ROCKY_CANDIDATE, rerun with --os-allow-minor to accept it"
+                break
+            fi
+            log INFO "node $NID: Rocky Linux release still $RECHECK"
+        fi
         log STEP "OS update on node $NID ($HOSTNAME, $OS_NAME)"
         log INFO "please wait, dnf output shows when node $NID is done (live: journalctl -f -u agent@node on node $NID)"
         # dnf output comes back in the task stderr: show it on success too.
@@ -350,7 +362,7 @@ fi
 
 # OS failure doesn't stop core and apps, but must fail the run.
 if [ "${OS_CHECK_FAILED:-no}" = yes ]; then
-    log FAIL "requested steps done, OS update not run: minor release check failed"
+    log FAIL "requested steps done, OS update not run on all nodes: minor release check failed"
     log INFO "===== run end ====="
     exit 1
 fi
