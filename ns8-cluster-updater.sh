@@ -10,15 +10,19 @@ SD_INFO="<6>"
 
 # Set to the tag by the release workflow.
 VERSION=dev
+REPO_URL=https://github.com/stephdl/ns8-cluster-updater
 
 DO_CORE=no
 DO_MODULES=no
 DO_OS=no
 OS_ALLOW_MINOR=no
+CHECK_UPDATE=no
 
 usage() {
     cat <<'EOF'
-Usage: ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all] [-h|--help]
+Usage: ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all]
+       ns8-cluster-updater.sh --check-update
+       ns8-cluster-updater.sh -h|--help
 
   --core       update NS8 core on all cluster nodes
   --modules    update all NS8 app instances (all nodes)
@@ -31,6 +35,11 @@ Usage: ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--
                repositories, the OS step is skipped on every node
   --all        shortcut for --os --core --modules (same order NS8's own
                automatic updates use: OS, then core, then apps)
+  --check-update
+               compare this script with the latest release on GitHub,
+               print the result and exit. Exit code: 0 up to date,
+               1 cannot check, 2 newer release available. Every run
+               also logs a warning when a newer release exists
   -h, --help   show this help and exit
 
 No flag given: print this help, do nothing.
@@ -53,10 +62,17 @@ for arg in "$@"; do
         --os) DO_OS=yes ;;
         --os-allow-minor) OS_ALLOW_MINOR=yes ;;
         --all) DO_OS=yes; DO_CORE=yes; DO_MODULES=yes ;;
+        --check-update) CHECK_UPDATE=yes ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage; exit 1 ;;
     esac
 done
+
+if [ "$CHECK_UPDATE" = yes ] && [ "$DO_OS$DO_CORE$DO_MODULES$OS_ALLOW_MINOR" != nononono ]; then
+    echo "--check-update can't be combined with other options" >&2
+    usage
+    exit 1
+fi
 
 if [ "$OS_ALLOW_MINOR" = yes ] && [ "$DO_OS" = no ]; then
     echo "--os-allow-minor needs --os or --all" >&2
@@ -98,6 +114,35 @@ run_step() {
         log FAIL "$label (exit $rc)"
         return "$rc"
     fi
+}
+
+# Prints the latest release tag. The /releases/latest redirect avoids the
+# GitHub API rate limit.
+latest_release() {
+    local url
+    url=$(curl -fs --max-time 10 -o /dev/null -w '%{redirect_url}' "$REPO_URL/releases/latest") || return 1
+    case "$url" in
+        "$REPO_URL"/releases/tag/?*) echo "${url##*/}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Returns 0 up to date, 1 cannot check, 2 newer release available.
+check_update() {
+    local latest
+    if ! latest=$(latest_release); then
+        log INFO "cannot reach GitHub, script update check skipped"
+        return 1
+    fi
+    if [ "$VERSION" = dev ]; then
+        log INFO "development build, latest release is $latest"
+    elif [ "$(printf '%s\n' "$VERSION" "$latest" | sort -V | tail -1)" = "$VERSION" ]; then
+        log INFO "script is up to date ($VERSION)"
+    else
+        log WARN "newer ns8-cluster-updater release available: $VERSION -> $latest, see $REPO_URL#install"
+        return 2
+    fi
+    return 0
 }
 
 die() {
@@ -196,6 +241,11 @@ log_version_diff() {
     fi
 }
 
+if [ "$CHECK_UPDATE" = yes ]; then
+    check_update
+    exit $?
+fi
+
 [ "$(id -u)" -eq 0 ] || die "must run as root"
 command -v runagent >/dev/null 2>&1 || die "runagent not found, not an NS8 node"
 
@@ -206,6 +256,8 @@ flock -n 9 || die "another ns8-cluster-updater run is in progress"
 
 log INFO "===== run start (ns8-cluster-updater $VERSION) ====="
 log INFO "steps enabled: core=$DO_CORE modules=$DO_MODULES os=$DO_OS"
+# Never fails the run: an old script still updates the cluster.
+check_update || true
 
 # Check the role locally: a worker can't submit cluster tasks. Exit 0, as
 # the script may be installed on every node for leader failover.

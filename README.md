@@ -65,7 +65,9 @@ every run.
 ## Usage
 
 ```
-ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all] [-h|--help]
+ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all]
+ns8-cluster-updater.sh --check-update
+ns8-cluster-updater.sh -h|--help
 ```
 
 | Option        | Effect |
@@ -75,6 +77,7 @@ ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all] [-
 | `--os`        | Update OS packages of Rocky Linux nodes with NS8's `update-os` node action. Other nodes are skipped. |
 | `--os-allow-minor` | Let `--os` move Rocky Linux to a new minor release (e.g. 9.8 to 9.9). See Minor release check. |
 | `--all`       | Shortcut for `--os --core --modules`, run in that order (same as NS8's own automatic updates). |
+| `--check-update` | Compare the installed script with the latest GitHub release, print the result and exit. See Script update check. |
 | `-h`, `--help`| Show usage and exit. |
 
 No option: prints usage, does nothing.
@@ -177,10 +180,12 @@ as NS8 automatic updates: OS, then core, then apps.
 flowchart TD
     start([ns8-cluster-updater.sh options]) --> opts{options valid?}
     opts -- "none, or -h" --> help([print help, exit 0])
-    opts -- "unknown option, or --os-allow-minor without --os/--all" --> badopt([print help, exit 1])
+    opts -- "unknown option, --os-allow-minor without --os/--all,<br>or --check-update with other options" --> badopt([print help, exit 1])
+    opts -- "--check-update" --> chkonly([compare with latest GitHub release,<br>exit 0, 1 or 2])
     opts -- yes --> guards{"root, runagent found,<br>no other run in progress?"}
     guards -- no --> fatal([FATAL, exit 1])
-    guards -- yes --> leader{this node is the leader?}
+    guards -- yes --> selfchk["script update check:<br>WARN if a newer release exists,<br>never stops the run"]
+    selfchk --> leader{this node is the leader?}
     leader -- no --> notleader([FAIL, nothing done, exit 0])
     leader -- yes --> sub{subscription?}
     sub -- yes --> subok([NS8 handles updates, exit 0])
@@ -309,6 +314,34 @@ Every message goes to stderr with a systemd journal priority prefix
 NS8 core itself uses in `agent/__init__.py`'s `SD_*` constants). Run
 interactively, they print straight to the terminal; run under the shipped
 service, journald picks up the prefix and stores the right severity.
+
+### Script update check
+
+Every run asks GitHub for the latest release of this script, right after
+the start line. When a newer one exists, it logs a warning:
+
+```
+WARN: newer ns8-cluster-updater release available: 1.0.2 -> 1.0.3, see https://github.com/stephdl/ns8-cluster-updater#install
+```
+
+The run goes on as usual. If GitHub can't be reached, it logs an info
+line and goes on too. To find the warning in the journal:
+
+```
+journalctl -u ns8-cluster-updater.service -p warning
+```
+
+To check by hand, without root and without updating anything:
+
+```
+ns8-cluster-updater.sh --check-update
+```
+
+It exits 0 when up to date, 1 when GitHub can't be reached, and 2 when a
+newer release is available. A development copy (version `dev`) only
+prints the latest release and exits 0. The lookup follows the
+`/releases/latest` redirect, not the GitHub API, so it has no rate limit.
+It only reports: the script never updates itself.
 
 ## Other OS updates
 
