@@ -65,7 +65,7 @@ every run.
 ## Usage
 
 ```
-ns8-cluster-updater.sh [--core] [--modules] [--os] [--all] [-h|--help]
+ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all] [-h|--help]
 ```
 
 | Option        | Effect |
@@ -73,6 +73,7 @@ ns8-cluster-updater.sh [--core] [--modules] [--os] [--all] [-h|--help]
 | `--core`      | Update NS8 core on all cluster nodes, only if a newer version is available. |
 | `--modules`   | Update all NS8 app instances, on all nodes, only if at least one has a pending update. |
 | `--os`        | Update OS packages of Rocky Linux nodes with NS8's `update-os` node action. Other nodes are skipped. |
+| `--os-allow-minor` | Let `--os` move Rocky Linux to a new minor release (e.g. 9.8 to 9.9). See Minor release check. |
 | `--all`       | Shortcut for `--os --core --modules`, run in that order (same as NS8's own automatic updates). |
 | `-h`, `--help`| Show usage and exit. |
 
@@ -168,6 +169,65 @@ systemctl list-timers ns8-cluster-updater.timer
 
 ## How it works
 
+The script runs on the cluster leader. It never connects to other nodes:
+every node step goes through NS8 agent tasks. Steps run in the same order
+as NS8 automatic updates: OS, then core, then apps.
+
+```mermaid
+flowchart TD
+    start([ns8-cluster-updater.sh options]) --> opts{options valid?}
+    opts -- "none, or -h" --> help([print help, exit 0])
+    opts -- "unknown option, or --os-allow-minor without --os/--all" --> badopt([print help, exit 1])
+    opts -- yes --> guards{"root, runagent found,<br>no other run in progress?"}
+    guards -- no --> fatal([FATAL, exit 1])
+    guards -- yes --> leader{this node is the leader?}
+    leader -- no --> notleader([FAIL, nothing done, exit 0])
+    leader -- yes --> sub{subscription?}
+    sub -- yes --> subok([NS8 handles updates, exit 0])
+    sub -- no --> wantos{--os?}
+
+    wantos -- yes --> nodes["list-nodes: OS and release of each node"]
+    nodes -- "OS unknown on a node" --> fatal
+    nodes --> allow{--os-allow-minor?}
+    allow -- yes --> loop
+    allow -- no --> lookup["leader: newest rocky-release<br>in ns-baseos/ns-appstream"]
+    lookup -- "lookup fails" --> checkfail["FAIL, OS skipped,<br>run will exit 1"]
+    lookup -- "a node release differs" --> pending["WARN, OS skipped on all nodes"]
+    lookup -- "all nodes match" --> loop
+
+    loop["next node"] --> rocky{Rocky Linux?}
+    rocky -- no --> skipnode["WARN, node skipped"] --> more
+    rocky -- yes --> recheck{"lookup again<br>(not with --os-allow-minor)"}
+    recheck -- "lookup fails" --> recheckfail["FAIL, nodes left not updated,<br>run will exit 1"]
+    recheck -- "new minor appeared" --> stopped["WARN, nodes left not updated"]
+    recheck -- "same release: INFO, or --os-allow-minor" --> updateos["update-os task on the node"]
+    updateos -- fails --> osfail["FAIL, run will exit 1"] --> more
+    updateos -- ok --> more{more nodes?}
+    more -- yes --> loop
+    more -- no --> reboot["reboot check on the leader only,<br>never reboots"]
+
+    checkfail --> wantcore
+    pending --> wantcore
+    stopped --> reboot
+    recheckfail --> reboot
+    reboot --> wantcore
+    wantos -- no --> wantcore{--core and a newer core?}
+
+    wantcore -- yes --> core["update-core on all nodes,<br>check cluster status"]
+    core -- fails --> fatal
+    core -- ok --> wantmod
+    wantcore -- no --> wantmod{--modules and pending app updates?}
+    wantmod -- yes --> mods["update-modules"]
+    mods -- fails --> fatal
+    mods -- ok --> done
+    wantmod -- no --> done{"minor check failed,<br>or a node update failed?"}
+    done -- yes --> endfail([FAIL, exit 1])
+    done -- no --> endok([OK, exit 0])
+```
+
+A blocked OS step never stops core and apps. A failed core or apps update
+stops the run at once.
+
 ### OS updates
 
 `--os` runs NS8's own `update-os` action on each node, one node at a
@@ -195,6 +255,29 @@ script stops with an error before any update: check the metrics module.
 A failed OS update on one node does not stop the other steps. Core and apps
 are still updated, then the script exits 1 so the systemd run shows as
 failed.
+
+### Minor release check
+
+Before any OS update, the leader asks `ns-baseos` and `ns-appstream` for
+the newest `rocky-release` version. It compares that version with the
+release of each Rocky Linux node, read from `cluster/list-nodes`. All Rocky
+nodes use the same NethServer mirrorlist, so one lookup on the leader
+covers them all.
+
+If a new minor release is available, the OS step is skipped on all nodes,
+with a warning. Core and apps are still updated. This keeps the whole
+cluster on the same minor release. When you are ready, run once with
+`--os-allow-minor`. If the lookup fails, the OS step is skipped too and
+the script exits 1. A leader without dnf cannot do the lookup: Rocky
+workers are then skipped unless you pass `--os-allow-minor`.
+
+The lookup runs again right before each node is updated, since the mirror
+can publish a new minor while earlier nodes update. If the answer changes,
+the nodes left are not updated, so they stay on the same minor as the
+nodes already done.
+
+Rocky Linux has no long-term support per minor release. Once 9.9 is out,
+9.8 gets no more security fixes, so don't stay on the old minor for long.
 
 ### Subscription
 
@@ -251,6 +334,11 @@ installed.
 
 - Only Rocky Linux nodes get OS updates, from `ns-baseos` and
   `ns-appstream` only. For anything else, see Other OS updates above.
+- The minor release check only guards this script. NS8 automatic updates
+  and a manual `dnf update` don't run it, and will move a node to a new
+  minor as soon as the mirror serves it.
+- The release is checked right before each node update, not during it. A
+  new minor published while dnf runs on a node can still reach that node.
 - If NS8's native automatic updates are already enabled
   (`set-automatic-updates --data '{"apply_updates_is_active": true}'`), they
   run independently of this script, no coordination between them.
