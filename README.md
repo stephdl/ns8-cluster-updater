@@ -200,7 +200,7 @@ failed.
 ### Minor release check
 
 Before any OS update, the leader asks `ns-baseos` and `ns-appstream` for
-the newest `system-release` version. It compares that version with the
+the newest `rocky-release` version. It compares that version with the
 release of each Rocky Linux node, read from `cluster/list-nodes`. All Rocky
 nodes use the same NethServer mirrorlist, so one lookup on the leader
 covers them all.

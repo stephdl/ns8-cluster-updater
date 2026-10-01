@@ -170,7 +170,7 @@ rocky_release_candidate() {
     # Every Rocky node resolves ns-baseos through the same mirrorlist, so
     # the leader's answer holds for the whole cluster.
     dnf -q --refresh --disablerepo='*' --enablerepo=ns-baseos,ns-appstream \
-        repoquery --latest-limit=1 --qf '%{version}\n' --whatprovides system-release \
+        repoquery --latest-limit=1 --qf '%{version}\n' rocky-release \
         | sort -V | tail -1
 }
 
@@ -257,7 +257,7 @@ if [ "$DO_OS" = yes ]; then
         elif ! ROCKY_CANDIDATE=$(rocky_release_candidate) || [ -z "$ROCKY_CANDIDATE" ]; then
             log FAIL "cannot read the newest Rocky Linux release from ns-baseos, OS update skipped on all nodes"
             DO_OS=no
-            OS_FAILED=yes
+            OS_CHECK_FAILED=yes
         elif [ "$ROCKY_RELEASES" != "$ROCKY_CANDIDATE" ]; then
             log WARN "OS update skipped on all nodes: Rocky Linux release change pending ($ROCKY_RELEASES -> $ROCKY_CANDIDATE), rerun with --os-allow-minor to accept it"
             DO_OS=no
@@ -349,6 +349,11 @@ if [ "$DO_MODULES" = yes ]; then
 fi
 
 # OS failure doesn't stop core and apps, but must fail the run.
+if [ "${OS_CHECK_FAILED:-no}" = yes ]; then
+    log FAIL "requested steps done, OS update not run: minor release check failed"
+    log INFO "===== run end ====="
+    exit 1
+fi
 if [ "${OS_FAILED:-no}" = yes ]; then
     log FAIL "requested steps done, OS update failed on at least one node"
     log INFO "===== run end ====="
