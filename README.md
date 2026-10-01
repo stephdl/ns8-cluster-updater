@@ -65,7 +65,7 @@ every run.
 ## Usage
 
 ```
-ns8-cluster-updater.sh [--core] [--modules] [--os] [--all] [-h|--help]
+ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all] [-h|--help]
 ```
 
 | Option        | Effect |
@@ -73,6 +73,7 @@ ns8-cluster-updater.sh [--core] [--modules] [--os] [--all] [-h|--help]
 | `--core`      | Update NS8 core on all cluster nodes, only if a newer version is available. |
 | `--modules`   | Update all NS8 app instances, on all nodes, only if at least one has a pending update. |
 | `--os`        | Update OS packages of Rocky Linux nodes with NS8's `update-os` node action. Other nodes are skipped. |
+| `--os-allow-minor` | Let `--os` move Rocky Linux to a new minor release (e.g. 9.8 to 9.9). See Minor release check. |
 | `--all`       | Shortcut for `--os --core --modules`, run in that order (same as NS8's own automatic updates). |
 | `-h`, `--help`| Show usage and exit. |
 
@@ -195,6 +196,24 @@ script stops with an error before any update: check the metrics module.
 A failed OS update on one node does not stop the other steps. Core and apps
 are still updated, then the script exits 1 so the systemd run shows as
 failed.
+
+### Minor release check
+
+Before any OS update, the leader asks `ns-baseos` and `ns-appstream` for
+the newest `system-release` version. It compares that version with the
+release of each Rocky Linux node, read from `cluster/list-nodes`. All Rocky
+nodes use the same NethServer mirrorlist, so one lookup on the leader
+covers them all.
+
+If a new minor release is available, the OS step is skipped on all nodes,
+with a warning. Core and apps are still updated. This keeps the whole
+cluster on the same minor release. When you are ready, run once with
+`--os-allow-minor`. If the lookup fails, the OS step is skipped too and
+the script exits 1. A leader without dnf cannot do the lookup: Rocky
+workers are then skipped unless you pass `--os-allow-minor`.
+
+Rocky Linux has no long-term support per minor release. Once 9.9 is out,
+9.8 gets no more security fixes, so don't stay on the old minor for long.
 
 ### Subscription
 

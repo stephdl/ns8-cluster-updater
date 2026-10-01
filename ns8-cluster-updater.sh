@@ -14,16 +14,21 @@ VERSION=dev
 DO_CORE=no
 DO_MODULES=no
 DO_OS=no
+OS_ALLOW_MINOR=no
 
 usage() {
     cat <<'EOF'
-Usage: ns8-cluster-updater.sh [--core] [--modules] [--os] [--all] [-h|--help]
+Usage: ns8-cluster-updater.sh [--core] [--modules] [--os] [--os-allow-minor] [--all] [-h|--help]
 
   --core       update NS8 core on all cluster nodes
   --modules    update all NS8 app instances (all nodes)
   --os         update OS packages of Rocky Linux nodes with NS8's update-os
                node action (ns-baseos+ns-appstream only); other nodes are
                skipped
+  --os-allow-minor
+               let --os move Rocky Linux to a new minor release (e.g.
+               9.8 -> 9.9). Without it, if a new minor is in the
+               repositories, the OS step is skipped on every node
   --all        shortcut for --os --core --modules (same order NS8's own
                automatic updates use: OS, then core, then apps)
   -h, --help   show this help and exit
@@ -46,11 +51,18 @@ for arg in "$@"; do
         --core) DO_CORE=yes ;;
         --modules) DO_MODULES=yes ;;
         --os) DO_OS=yes ;;
+        --os-allow-minor) OS_ALLOW_MINOR=yes ;;
         --all) DO_OS=yes; DO_CORE=yes; DO_MODULES=yes ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage; exit 1 ;;
     esac
 done
+
+if [ "$OS_ALLOW_MINOR" = yes ] && [ "$DO_OS" = no ]; then
+    echo "--os-allow-minor needs --os or --all" >&2
+    usage
+    exit 1
+fi
 
 log() {
     local level="$1" msg="$2" prefix
@@ -154,6 +166,14 @@ local_reboot_needed() {
     [ -n "$latest" ] && [ "$latest" != "$(uname -r)" ]
 }
 
+rocky_release_candidate() {
+    # Every Rocky node resolves ns-baseos through the same mirrorlist, so
+    # the leader's answer holds for the whole cluster.
+    dnf -q --refresh --disablerepo='*' --enablerepo=ns-baseos,ns-appstream \
+        repoquery --latest-limit=1 --qf '%{version}\n' --whatprovides system-release \
+        | sort -V | tail -1
+}
+
 any_update_pending() {
     jq -e 'any(.[]; .update != "")' <<<"$1" >/dev/null
 }
@@ -218,11 +238,36 @@ if [ "$DO_OS" = yes ]; then
     OS_FAILED=no
     # update-os needs ns-baseos/ns-appstream, created by the installer on
     # Rocky Linux only. os_release comes from the metrics module.
-    NODES_OS=$(api_cli_silent list-nodes | jq -c '[.nodes[] | {(.node_id | tostring): .os_release.name}] | add // {}') \
+    NODES_LIST=$(api_cli_silent list-nodes) \
         || die "list-nodes failed, cannot tell which nodes run Rocky Linux"
+    NODES_OS=$(jq -c '[.nodes[] | {(.node_id | tostring): .os_release.name}] | add // {}' <<<"$NODES_LIST")
     # Stop before any update: skipping silently would leave the OS stale.
     UNKNOWN_OS=$(jq -r --argjson os "$NODES_OS" '[.nodes[].id | tostring | select(($os[.] // "") == "")] | join(",")' <<<"$STATUS")
     [ -z "$UNKNOWN_OS" ] || die "OS unknown on node(s) $UNKNOWN_OS, metrics unavailable, check the metrics module"
+
+    # Checked on all nodes before any update, so the cluster never ends up
+    # split across two minor releases.
+    ROCKY_RELEASES=$(jq -r '[.nodes[] | select(.os_release.name | startswith("Rocky")) | .os_release.version] | unique | join(" ")' <<<"$NODES_LIST")
+    if [ "$OS_ALLOW_MINOR" = yes ]; then
+        log INFO "minor release check skipped (--os-allow-minor)"
+    elif [ -n "$ROCKY_RELEASES" ]; then
+        if ! command -v dnf >/dev/null 2>&1; then
+            log WARN "OS update skipped on all nodes: leader has no dnf, cannot check the Rocky Linux minor release, rerun with --os-allow-minor to update anyway"
+            DO_OS=no
+        elif ! ROCKY_CANDIDATE=$(rocky_release_candidate) || [ -z "$ROCKY_CANDIDATE" ]; then
+            log FAIL "cannot read the newest Rocky Linux release from ns-baseos, OS update skipped on all nodes"
+            DO_OS=no
+            OS_FAILED=yes
+        elif [ "$ROCKY_RELEASES" != "$ROCKY_CANDIDATE" ]; then
+            log WARN "OS update skipped on all nodes: Rocky Linux release change pending ($ROCKY_RELEASES -> $ROCKY_CANDIDATE), rerun with --os-allow-minor to accept it"
+            DO_OS=no
+        else
+            log INFO "Rocky Linux release $ROCKY_RELEASES, no minor release change"
+        fi
+    fi
+fi
+
+if [ "$DO_OS" = yes ]; then
     while IFS=$'\t' read -r NID LOCAL HOSTNAME; do
         OS_NAME=$(jq -r --arg id "$NID" '.[$id] // ""' <<<"$NODES_OS")
         case "$OS_NAME" in
