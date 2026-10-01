@@ -1,33 +1,28 @@
 # ns8-cluster-updater
 
-Bash script to update a [NethServer 8](https://nethserver.org) cluster: core,
-applications and OS packages, in one run or separately, with a pre-check that
-skips an update call entirely when nothing is pending.
+Updates a [NethServer 8](https://nethserver.org) cluster from the leader:
+OS packages, core and apps, in that order. Each step is skipped when
+nothing is pending.
 
-It targets clusters without a subscription: with one, it does nothing (see
-Subscription below). OS updates cover Rocky Linux nodes only.
+Made for clusters without a subscription. OS updates cover Rocky Linux
+nodes only.
 
-## Why
+## Before you start
 
-`update-core` restarts `redis.service` and `api-server.service` on every
-node, even with nothing new to install. This drops the UI websocket and any
-in-flight `api-cli` task for a few seconds. The script checks first, reading
-the same repository view as the update actions, and skips the call when
-there's nothing pending. A failed check dies loudly instead of being read as
-"nothing pending".
+- Run it as root on the cluster leader. On another node it does nothing.
+- Without a subscription only. With one, it exits and lets NS8 update.
+- Turn off NS8 automatic updates, or both will update the cluster with no
+  coordination. NS8's own run also skips the minor release check below:
 
-Every task is also submitted with `extra.isNotificationHidden`, so it
-doesn't toast in every admin's UI. `api-cli` hardcodes that flag to `false`
-with no override, so the script calls the underlying `agent.tasks` Python
-API directly for this. Failures still show up normally.
+  ```
+  api-cli run set-automatic-updates --data '{"apply_updates_is_active": false}'
+  ```
+- `runagent` and `jq` are needed. No SSH between nodes.
 
 ## Install
 
-Install it on the cluster leader, as root. The script updates every node
-from there: nothing is needed on the other nodes.
-
-The commands below download the current release, check the files, and
-install the script with its systemd units:
+As root on the leader. This downloads the current release, checks the
+files and installs the script with its systemd units:
 
 ```
 cd "$(mktemp -d)"
@@ -39,28 +34,18 @@ sha256sum -c SHA256SUMS
 install -m 755 ns8-cluster-updater.sh /usr/local/sbin/
 install -m 644 ns8-cluster-updater.service ns8-cluster-updater.timer /etc/systemd/system/
 systemctl daemon-reload
+systemctl enable --now ns8-cluster-updater.timer
 ```
 
-`SHA256SUMS` is built by the release workflow when the tag is pushed, and
-attached to the release with the other files. `sha256sum -c` checks that
-each downloaded file matches it, so a truncated or corrupted download
-stops the install. It comes from the same release as the files, so it
-does not protect against a tampered release.
+The timer runs `--all` Tuesday to Friday, at a random time between 00:00
+and 06:00 (stable per host). That's the same window as NS8's own updates.
+If the host was off, it runs at next boot.
 
-The release workflow updates the version in `url` at each release. To
-update, run the same commands again. The version shows at the start of
-every run.
+To update the script, run the same commands again. Each run warns in the
+journal when a newer release is out.
 
-## Requirements
-
-- `root`, on the cluster leader (read from the local Redis replica). On
-  another node it logs an error and exits 0 without doing anything.
-- After a leader change, install it on the new leader. You can also install
-  it on every node beforehand: only the leader of the moment does the work.
-- `runagent` and `jq`.
-- No SSH between nodes: OS updates run as NS8 `update-os` node tasks.
-- Only one run at a time: a lock on `/run/ns8-cluster-updater.lock` makes
-  a second run, for example a manual one while the timer runs, exit 1.
+After a leader change, install it on the new leader. You can also install
+it on every node: only the current leader does the work.
 
 ## Usage
 
@@ -70,44 +55,80 @@ ns8-cluster-updater.sh --check-update
 ns8-cluster-updater.sh -h|--help
 ```
 
-| Option        | Effect |
-|---------------|--------|
-| `--core`      | Update NS8 core on all cluster nodes, only if a newer version is available. |
-| `--modules`   | Update all NS8 app instances, on all nodes, only if at least one has a pending update. |
-| `--os`        | Update OS packages of Rocky Linux nodes with NS8's `update-os` node action. Other nodes are skipped. |
-| `--os-allow-minor` | Let `--os` move Rocky Linux to a new minor release (e.g. 9.8 to 9.9). See Minor release check. |
-| `--all`       | Shortcut for `--os --core --modules`, run in that order (same as NS8's own automatic updates). |
-| `--check-update` | Compare the installed script with the latest GitHub release, print the result and exit. See Script update check. |
-| `-h`, `--help`| Show usage and exit. |
+| Option | Effect |
+|---|---|
+| `--all` | Same as `--os --core --modules`. |
+| `--os` | Update OS packages on Rocky Linux nodes. Other nodes are skipped. |
+| `--core` | Update NS8 core on all nodes, if a newer version exists. |
+| `--modules` | Update all apps, if at least one has an update. |
+| `--os-allow-minor` | Allow `--os` to move to a new Rocky minor, e.g. 9.8 to 9.9. |
+| `--check-update` | Check if a newer release of this script exists, then exit. |
+| `-h`, `--help` | Show help. With no option at all, too. |
 
-No option: prints usage, does nothing.
-
-## Scheduling
-
-```
-systemctl enable --now ns8-cluster-updater.timer
-```
-
-`ns8-cluster-updater.timer` fires Tuesday to Friday at 00:00, with a 6h
-randomized delay (`FixedRandomDelay=true`, so the offset is stable per
-host), same window as NS8's own `apply-updates.timer`. `Persistent=true`
-catches up on next boot if the host was off at the scheduled time.
-
-Check a run:
-
-```
-journalctl -u ns8-cluster-updater.service -e
-```
-
-Run it once now, without waiting for the timer:
+Run it now, without waiting for the timer:
 
 ```
 systemctl start ns8-cluster-updater.service
 ```
 
-The shipped `.service` always runs `--all`. Don't edit
-`ns8-cluster-updater.service` directly: a later `curl` reinstall overwrites
-it, same reason as the timer below. Use a drop-in instead:
+## Checking a run
+
+```
+journalctl -u ns8-cluster-updater.service -e
+```
+
+Only warnings and errors:
+
+```
+journalctl -u ns8-cluster-updater.service -p warning --no-pager
+```
+
+Look there for a skipped OS update, a failed node or a newer script
+release. Messages carry a journal priority, so `-p` filters them.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Done. Some steps may be skipped with a warning. |
+| 1 | Something failed, a bad option, or another run already in progress. |
+
+`--check-update` exits 0 when up to date, 1 when GitHub can't be reached
+and 2 when a newer release exists. A `dev` copy, run from git, always
+exits 0.
+
+## New Rocky minor releases
+
+The script never moves the cluster to a new Rocky minor on its own.
+
+Before the OS step, the leader looks up the newest `rocky-release` in
+`ns-baseos` and `ns-appstream`. It compares it with each Rocky node's
+release, from `cluster/list-nodes`. One lookup covers all nodes: they use
+the same NethServer mirror.
+
+- Same release everywhere: the OS step runs.
+- A new minor is out: the OS step is skipped on all nodes, with a
+  warning. Core and apps still run. Exit 0.
+- The lookup fails: the OS step is skipped, exit 1.
+
+The lookup runs again before each node. If a new minor shows up during the
+run, the nodes left are not updated. The cluster never ends up split
+across two minors.
+
+When you're ready for the new minor, run once by hand:
+
+```
+ns8-cluster-updater.sh --os --os-allow-minor
+```
+
+Don't wait too long. Rocky has no long-term support per minor: once 9.9 is
+out, 9.8 gets no more security fixes.
+
+## Changing what runs, and when
+
+Don't edit the shipped units: a reinstall overwrites them. Use drop-ins.
+
+Run other steps:
 
 ```
 systemctl edit ns8-cluster-updater.service
@@ -119,22 +140,11 @@ ExecStart=
 ExecStart=/usr/local/sbin/ns8-cluster-updater.sh --core --modules
 ```
 
-The empty `ExecStart=` first clears the shipped `--all` command; like
-`OnCalendar`, systemd appends `ExecStart=` lines instead of replacing them.
-`systemctl edit` reloads the unit itself on save, no manual
-`daemon-reload` needed.
-
-### Changing the schedule
-
-Don't edit `ns8-cluster-updater.timer` directly: a later `curl` reinstall
-overwrites it. Use a drop-in instead:
+Change the schedule:
 
 ```
 systemctl edit ns8-cluster-updater.timer
 ```
-
-This opens an editor on an override file. Add only the keys you want to
-change, under `[Timer]`:
 
 ```ini
 [Timer]
@@ -142,39 +152,34 @@ OnCalendar=
 OnCalendar=Sun 03:00:00
 ```
 
-The empty `OnCalendar=` first clears the shipped `Tue..Fri 00:00:00` value;
-systemd appends settings instead of replacing them, so skipping that line
-would leave both active. Some other schedules:
+The empty line first (`ExecStart=`, `OnCalendar=`) clears the shipped
+value. Without it, systemd keeps both. `systemctl edit` reloads the unit
+on save.
+
+Other schedules:
 
 ```ini
 # Every day at 1am
 OnCalendar=*-*-* 01:00:00
 
-# Twice a week, Monday and Thursday at 22:00
+# Monday and Thursday at 22:00
 OnCalendar=Mon,Thu 22:00:00
 
 # First day of the month, 4am
 OnCalendar=*-*-01 04:00:00
 ```
 
-To change the randomized delay or drop it entirely:
+Shorter random delay: `RandomizedDelaySec=1h` under `[Timer]`.
 
-```ini
-[Timer]
-RandomizedDelaySec=1h
-```
-
-`systemctl edit` reloads the unit itself on save. Check the next run time:
+Check the next run:
 
 ```
 systemctl list-timers ns8-cluster-updater.timer
 ```
 
-## How it works
+## How a run works
 
-The script runs on the cluster leader. It never connects to other nodes:
-every node step goes through NS8 agent tasks. Steps run in the same order
-as NS8 automatic updates: OS, then core, then apps.
+All node work goes through NS8 agent tasks from the leader.
 
 ```mermaid
 flowchart TD
@@ -230,148 +235,106 @@ flowchart TD
     done -- no --> endok([OK, exit 0])
 ```
 
-A blocked OS step never stops core and apps. A failed core or apps update
-stops the run at once.
+A skipped or failed OS step never stops core and apps. A failed core or
+apps update stops the run at once.
+
+### Why check before updating
+
+`update-core` restarts `redis.service` and `api-server.service` on every
+node, even when there is nothing to install. That drops the UI websocket
+and running `api-cli` tasks for a few seconds. So the script checks first,
+with the same repository view as the update actions, and skips the call
+when nothing is pending. A failed check is an error, never "nothing
+pending".
+
+Tasks are sent with `extra.isNotificationHidden`, so they don't pop up in
+every admin's UI. Failures still show. `api-cli` can't set that flag, so
+the script calls the `agent.tasks` Python API directly.
 
 ### OS updates
 
-`--os` runs NS8's own `update-os` action on each node, one node at a
-time. That action runs `dnf update` restricted to `ns-baseos` and
-`ns-appstream`, the same repositories NS8 automatic updates use.
-The dnf output of each node is printed once that node is done, on
-success too. A long update can keep the run silent for minutes: the task
-returns its output only at the end. To follow it live, open a shell on
-that node and run:
+`--os` runs NS8's `update-os` action on each Rocky node, one at a time. It
+runs `dnf update` with `ns-baseos` and `ns-appstream` only, like NS8's own
+updates.
+
+Each node's dnf output shows when that node is done. A long update can
+look silent for minutes. To follow it live, on that node:
 
 ```
 journalctl -f -u agent@node
 ```
 
-`update-os` needs the `ns-baseos` and `ns-appstream` repositories. The NS8
-installer creates them on Rocky Linux only. On other EL9 systems (AlmaLinux,
-RHEL) the action fails, and on Debian it does nothing. So the script runs
-it only on Rocky Linux nodes, and skips every other node with a warning
-(see Known limitations).
+The node OS comes from `cluster/list-nodes`, fed by the metrics module.
+If it's missing for a node, the script stops before any update. Check
+the metrics module then.
 
-The node OS comes from `cluster/list-nodes`, which reads it from the
-metrics module. If it is missing for any node, or `list-nodes` fails, the
-script stops with an error before any update: check the metrics module.
+A failed node does not stop the other steps. The run exits 1 at the end.
 
-A failed OS update on one node does not stop the other steps. Core and apps
-are still updated, then the script exits 1 so the systemd run shows as
-failed.
+### Reboots
 
-### Minor release check
-
-Before any OS update, the leader asks `ns-baseos` and `ns-appstream` for
-the newest `rocky-release` version. It compares that version with the
-release of each Rocky Linux node, read from `cluster/list-nodes`. All Rocky
-nodes use the same NethServer mirrorlist, so one lookup on the leader
-covers them all.
-
-If a new minor release is available, the OS step is skipped on all nodes,
-with a warning. Core and apps are still updated. This keeps the whole
-cluster on the same minor release. When you are ready, run once with
-`--os-allow-minor`. If the lookup fails, the OS step is skipped too and
-the script exits 1. A leader without dnf cannot do the lookup: Rocky
-workers are then skipped unless you pass `--os-allow-minor`.
-
-The lookup runs again right before each node is updated, since the mirror
-can publish a new minor while earlier nodes update. If the answer changes,
-the nodes left are not updated, so they stay on the same minor as the
-nodes already done.
-
-Rocky Linux has no long-term support per minor release. Once 9.9 is out,
-9.8 gets no more security fixes, so don't stay on the old minor for long.
-
-### Subscription
-
-With a subscription, the script logs a notice and exits 0 without doing
-anything. NS8's own automatic updates handle subscribed clusters, and
-running both would race on the same actions and on the dnf lock. The
-script targets clusters without a subscription.
-
-The pre-checks still read the repository "managed" view, the same view
-`update-core` and `update-modules` use when no user starts them. Today
-that view matches "latest" on the community repository.
-
-### Reboot detection
-
-The script never reboots. When the leader got an OS update, it runs
-`needs-restarting -r` there (or compares `uname -r` with the newest
-`kernel-core` when dnf-utils is missing) and reports whether a reboot is
-needed. When the leader was skipped (not Rocky Linux), it
-says the reboot state was not checked. `update-os` does not
-report it for the other nodes. When the leader needs a reboot, the script
-warns that the other updated nodes most likely need one too: they got the
-same packages from the same repositories in the same run. Check each one
-with `needs-restarting -r`.
-
-### Logging
-
-Every message goes to stderr with a systemd journal priority prefix
-(`<3>` error, `<4>` warning, `<5>` notice, `<6>` info, same convention
-NS8 core itself uses in `agent/__init__.py`'s `SD_*` constants). Run
-interactively, they print straight to the terminal; run under the shipped
-service, journald picks up the prefix and stores the right severity.
+The script never reboots. It checks the leader only, with
+`needs-restarting -r`, or by comparing `uname -r` with the newest
+`kernel-core` when dnf-utils is missing. `update-os` doesn't report it for
+other nodes. If the leader needs a reboot, the other updated nodes most
+likely do too. Check each with `needs-restarting -r`.
 
 ### Script update check
 
-Every run asks GitHub for the latest release of this script, right after
-the start line. When a newer one exists, it logs a warning:
+Each run looks up the latest release on GitHub. When it's newer than the
+installed copy, it logs:
 
 ```
 WARN: newer ns8-cluster-updater release available: 1.0.2 -> 1.0.3, see https://github.com/stephdl/ns8-cluster-updater#install
 ```
 
-The run goes on as usual. If GitHub can't be reached, it logs an info
-line and goes on too. To find the warning in the journal:
+The run goes on. If GitHub can't be reached, it logs an info line and
+goes on too. The script never updates itself.
 
-```
-journalctl -u ns8-cluster-updater.service -p warning
-```
+The installed version is stamped into the script by the release workflow
+(`VERSION=` line) and shows at the start of each run. The lookup follows
+the `/releases/latest` redirect, not the GitHub API, so there's no rate
+limit.
 
-To check by hand, without root and without updating anything:
+### Subscription
 
-```
-ns8-cluster-updater.sh --check-update
-```
+With a subscription, the script logs a notice and exits 0. NS8 updates
+subscribed clusters itself. Running both would race on the same actions
+and on the dnf lock.
 
-It exits 0 when up to date, 1 when GitHub can't be reached, and 2 when a
-newer release is available. A development copy (version `dev`) only
-prints the latest release and exits 0. The lookup follows the
-`/releases/latest` redirect, not the GitHub API, so it has no rate limit.
-It only reports: the script never updates itself.
+### One run at a time
+
+A lock on `/run/ns8-cluster-updater.lock` stops a second run with exit 1,
+for example a manual run while the timer runs.
+
+### Logging
+
+Messages go to stderr with a journal priority prefix: `<3>` error, `<4>`
+warning, `<5>` notice, `<6>` info. Same convention as NS8 core's `SD_*`
+constants. Under systemd, journald stores the right priority.
 
 ## Other OS updates
 
-The script only runs what NS8 supports. Any other OS update is up to you:
-set it up yourself on each node, and schedule it on a day this timer does
-not run (it runs Tuesday to Friday), so a package upgrade never overlaps a
-core update. Some ideas:
+The script only runs what NS8 supports. For anything else, set it up on
+each node. Schedule it on a day this timer doesn't run (it runs Tuesday
+to Friday), so it never overlaps a core update.
 
-- Rocky Linux with EPEL or another extra repository: `dnf-automatic` on
-  each node, with the repositories you want enabled. Exclude `podman*`
-  there (`excludepkgs=podman*` in the repository file), so a third-party
-  build never replaces the one NS8 is tested with.
-- AlmaLinux or RHEL: `dnf-automatic` on each node, with the distribution's
-  own repositories.
+- Rocky Linux with EPEL or other repos: `dnf-automatic`. Add
+  `excludepkgs=podman*` to those repos, so NS8 keeps its tested podman.
+- AlmaLinux or RHEL: `dnf-automatic` with the distribution repos.
 - Debian: `unattended-upgrades`, or
   [proxmox-updater](https://github.com/stephdl/proxmox-updater) for a full
   upgrade.
 
-Whatever you use, reboot the node yourself when a new kernel is
-installed.
+Reboot the node yourself after a new kernel.
 
 ## Known limitations
 
-- Only Rocky Linux nodes get OS updates, from `ns-baseos` and
-  `ns-appstream` only. For anything else, see Other OS updates above.
+- OS updates: Rocky Linux nodes only, from `ns-baseos` and `ns-appstream`
+  only.
 - The minor release check only guards this script. NS8 automatic updates
-  and a manual `dnf update` don't run it, and will move a node to a new
-  minor as soon as the mirror serves it.
-- The release is checked right before each node update, not during it. A
-  new minor published while dnf runs on a node can still reach that node.
-- If NS8's native automatic updates are already enabled
-  (`set-automatic-updates --data '{"apply_updates_is_active": true}'`), they
-  run independently of this script, no coordination between them.
+  (`set-automatic-updates --data '{"apply_updates_is_active": true}'`) and
+  a manual `dnf update` skip it.
+- The release is checked before each node update, not during it. A minor
+  published while dnf runs on a node can still reach that node.
+- `SHA256SUMS` catches a broken download. It comes from the same release,
+  so it doesn't catch a tampered release.
