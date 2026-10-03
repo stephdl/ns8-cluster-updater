@@ -101,10 +101,12 @@ exits 2.
 
 The script never moves the cluster to a new Rocky minor on its own.
 
-Before the OS step, the leader looks up the newest `rocky-release` in
-`ns-baseos` and `ns-appstream`. It compares it with each Rocky node's
-release, from `cluster/list-nodes`. One lookup covers all nodes: they use
-the same NethServer mirror.
+Before the OS step, the leader looks up the newest Rocky minor in
+`ns-baseos` and `ns-appstream`. It takes the highest of the
+`rocky-release` version and of the `el9_N` tags of all packages, so a
+mirror shipping 9.9 packages before its `rocky-release` is caught too. It
+compares that with each Rocky node's release, from `cluster/list-nodes`.
+One lookup covers all nodes: they use the same NethServer mirror.
 
 - Same release everywhere: the OS step runs.
 - A new minor is out: the OS step is skipped on all nodes, with a
@@ -202,7 +204,7 @@ flowchart TD
     nodes -- "OS unknown on a node" --> fatal
     nodes --> allow{--os-allow-minor?}
     allow -- yes --> loop
-    allow -- no --> lookup["leader: newest rocky-release<br>in ns-baseos/ns-appstream"]
+    allow -- no --> lookup["leader: newest minor in ns-baseos/ns-appstream,<br>from rocky-release and el9_N package tags"]
     lookup -- "lookup fails" --> checkfail["FAIL, OS skipped,<br>run will exit 1"]
     lookup -- "a node release differs,<br>or the leader has no dnf" --> pending["WARN, OS skipped on all nodes"]
     lookup -- "all nodes match" --> loop

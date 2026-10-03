@@ -213,9 +213,15 @@ local_reboot_needed() {
 
 rocky_release_candidate() {
     # Every Rocky node resolves ns-baseos through the same mirrorlist, so
-    # the leader's answer holds for the whole cluster.
+    # the leader's answer holds for the whole cluster. The elX_Y tag of each
+    # package counts too: the mirror could ship packages of a new minor
+    # before its rocky-release.
     dnf -q --refresh --disablerepo='*' --enablerepo=ns-baseos,ns-appstream \
-        repoquery --latest-limit=1 --qf '%{version}\n' rocky-release \
+        repoquery --latest-limit=1 --qf '%{name} %{version} %{release}\n' \
+        | awk '$1 == "rocky-release" { print $2 }
+            match($3, /\.el[0-9]+_[0-9]+/) {
+                tag = substr($3, RSTART + 3, RLENGTH - 3); sub("_", ".", tag); print tag
+            }' \
         | sort -V | tail -1
 }
 
