@@ -273,10 +273,10 @@ A failed node does not stop the other steps. The run exits 1 at the end.
 ### Reboots
 
 The script never reboots. It checks the leader only, with
-`needs-restarting -r`, or by comparing `uname -r` with the newest
-`kernel-core` when dnf-utils is missing. `update-os` doesn't report it for
-other nodes. If the leader needs a reboot, the other updated nodes most
-likely do too. Check each with `needs-restarting -r`.
+`dnf needs-restarting -r`, or by comparing `uname -r` with the newest
+`kernel-core` when that dnf plugin is missing. `update-os` doesn't
+report it for other nodes. If the leader needs a reboot, the other updated
+nodes most likely do too. Check each with `dnf needs-restarting -r`.
 
 ### Script update check
 

@@ -201,11 +201,11 @@ snapshot_installed_modules() {
 }
 
 local_reboot_needed() {
-    if command -v needs-restarting >/dev/null 2>&1; then
-        ! needs-restarting -r >/dev/null 2>&1
+    # dnf exits 1 for an unknown command too, so probe the plugin first.
+    if dnf needs-restarting --help >/dev/null 2>&1; then
+        ! dnf -q needs-restarting -r >/dev/null 2>&1
         return
     fi
-    # needs-restarting (dnf-utils) is not always installed.
     local latest
     latest=$(rpm -q --last kernel-core 2>/dev/null | head -1 | awk '{print $1}' | sed 's/^kernel-core-//')
     [ -n "$latest" ] && [ "$latest" != "$(uname -r)" ]
@@ -364,15 +364,15 @@ if [ "$DO_OS" = yes ]; then
     done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local] | @tsv')
 
     if [ "$LOCAL_UPDATED" != yes ]; then
-        log INFO "this node got no OS update, reboot state not checked, check updated nodes with needs-restarting -r"
+        log INFO "this node got no OS update, reboot state not checked, check updated nodes with dnf needs-restarting -r"
     elif [ "$REBOOT_LOCAL" = yes ]; then
         log INFO "reboot needed on this node: yes"
         log WARN "reboot this node manually, script does not reboot"
         # Every updated node got the same packages in this run.
-        log WARN "other updated nodes most likely need a reboot too, check each one with needs-restarting -r"
+        log WARN "other updated nodes most likely need a reboot too, check each one with dnf needs-restarting -r"
     else
         log INFO "reboot needed on this node: no"
-        log INFO "reboot state of other nodes is not reported, check them with needs-restarting -r"
+        log INFO "reboot state of other nodes is not reported, check them with dnf needs-restarting -r"
     fi
 fi
 
