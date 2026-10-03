@@ -17,7 +17,8 @@ nodes only.
   ```
   api-cli run set-automatic-updates --data '{"apply_updates_is_active": false}'
   ```
-- `runagent` and `jq` are needed. No SSH between nodes.
+- It only uses tools NS8 core already ships: `runagent`, `jq`, `curl`.
+  No SSH between nodes.
 
 ## Install
 
@@ -39,7 +40,9 @@ systemctl enable --now ns8-cluster-updater.timer
 
 The timer runs `--all` Tuesday to Friday, at a random time between 00:00
 and 06:00 (stable per host). That's the same window as NS8's own updates.
-If the host was off, it runs at next boot.
+If the host was off, it starts at next boot, but `--os` usually stops
+there: the metrics module isn't up yet, so the node OS is unknown. Nothing
+is updated and the next timer run does the work.
 
 To update the script, run the same commands again. Each run warns in the
 journal when a newer release is out.
@@ -116,8 +119,9 @@ One lookup covers all nodes: they use the same NethServer mirror.
   nodes, with a warning. Exit 0. Use `--os-allow-minor` to update anyway.
 
 The lookup runs again before each node. If a new minor shows up during the
-run, the nodes left are not updated. The cluster never ends up split
-across two minors.
+run, the nodes left are not updated, so the cluster doesn't end up split
+across two minors. A minor published while dnf runs on a node can still
+reach that node, see [Known limitations](#known-limitations).
 
 When you're ready for the new minor, run once by hand:
 
@@ -239,8 +243,9 @@ flowchart TD
     done -- no --> endok([OK, exit 0])
 ```
 
-A skipped or failed OS step never stops core and apps. A failed core or
-apps update stops the run at once.
+A skipped or failed OS update never stops core and apps. Two OS checks
+do stop the whole run before any update: `list-nodes` failing, and a node
+whose OS is unknown. A failed core or apps update stops the run at once.
 
 ### Why check before updating
 
@@ -325,8 +330,11 @@ The script only runs what NS8 supports. For anything else, set it up on
 each node. Schedule it on a day this timer doesn't run (it runs Tuesday
 to Friday), so it never overlaps a core update.
 
-- Rocky Linux with EPEL or other repos: `dnf-automatic`. Add
-  `excludepkgs=podman*` to those repos, so NS8 keeps its tested podman.
+- Rocky Linux with EPEL or other repos: a timer of your own running
+  `dnf update -y --disablerepo='ns-*'`. Don't use `dnf-automatic`: it
+  updates every enabled repo, `ns-baseos` and `ns-appstream` included, and
+  skips the minor release check. Add `excludepkgs=podman*` to those repos,
+  so NS8 keeps its tested podman.
 - AlmaLinux or RHEL: `dnf-automatic` with the distribution repos.
 - Debian: `unattended-upgrades`, or
   [proxmox-updater](https://github.com/stephdl/proxmox-updater) for a full
@@ -339,8 +347,8 @@ Reboot the node yourself after a new kernel.
 - OS updates: Rocky Linux nodes only, from `ns-baseos` and `ns-appstream`
   only.
 - The minor release check only guards this script. NS8 automatic updates
-  (`set-automatic-updates --data '{"apply_updates_is_active": true}'`) and
-  a manual `dnf update` skip it.
+  (`set-automatic-updates --data '{"apply_updates_is_active": true}'`),
+  `dnf-automatic` and a manual `dnf update` skip it.
 - The release is checked before each node update, not during it. A minor
   published while dnf runs on a node can still reach that node.
 - `SHA256SUMS` catches a broken download. It comes from the same release,
