@@ -91,7 +91,8 @@ ExecStart=
 ExecStart=/usr/local/sbin/ns8-cluster-updater.sh --core --modules
 ```
 
-Change the schedule:
+Change the schedule, for example back to Tuesday to Friday, the same
+days as NS8's own updates:
 
 ```
 systemctl edit ns8-cluster-updater.timer
@@ -100,7 +101,7 @@ systemctl edit ns8-cluster-updater.timer
 ```ini
 [Timer]
 OnCalendar=
-OnCalendar=Sun 03:00:00
+OnCalendar=Tue..Fri 00:00:00
 ```
 
 The empty line first (`ExecStart=`, `OnCalendar=`) clears the shipped
@@ -110,6 +111,9 @@ on save.
 Other schedules:
 
 ```ini
+# Sunday at 3am
+OnCalendar=Sun 03:00:00
+
 # Every day at 1am
 OnCalendar=*-*-* 01:00:00
 
