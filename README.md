@@ -94,8 +94,8 @@ Exit codes:
 | 1 | Something failed, a bad option, or another run already in progress. |
 
 `--check-update` exits 0 when up to date, 1 when GitHub can't be reached
-and 2 when a newer release exists. A `dev` copy, run from git, always
-exits 0.
+and 2 when a newer release exists. A `dev` copy, run from git, never
+exits 2.
 
 ## New Rocky minor releases
 
@@ -110,6 +110,8 @@ the same NethServer mirror.
 - A new minor is out: the OS step is skipped on all nodes, with a
   warning. Core and apps still run. Exit 0.
 - The lookup fails: the OS step is skipped, exit 1.
+- The leader has no dnf, so no lookup: the OS step is skipped on all
+  nodes, with a warning. Exit 0. Use `--os-allow-minor` to update anyway.
 
 The lookup runs again before each node. If a new minor shows up during the
 run, the nodes left are not updated. The cluster never ends up split
@@ -202,7 +204,7 @@ flowchart TD
     allow -- yes --> loop
     allow -- no --> lookup["leader: newest rocky-release<br>in ns-baseos/ns-appstream"]
     lookup -- "lookup fails" --> checkfail["FAIL, OS skipped,<br>run will exit 1"]
-    lookup -- "a node release differs" --> pending["WARN, OS skipped on all nodes"]
+    lookup -- "a node release differs,<br>or the leader has no dnf" --> pending["WARN, OS skipped on all nodes"]
     lookup -- "all nodes match" --> loop
 
     loop["next node"] --> rocky{Rocky Linux?}
