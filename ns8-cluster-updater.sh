@@ -296,6 +296,10 @@ if [ "$DO_OS" = yes ]; then
     # Stop before any update: skipping silently would leave the OS stale.
     UNKNOWN_OS=$(jq -r --argjson os "$NODES_OS" '[.nodes[].id | tostring | select(($os[.] // "") == "")] | join(",")' <<<"$STATUS")
     [ -z "$UNKNOWN_OS" ] || die "OS unknown on node(s) $UNKNOWN_OS, metrics unavailable, check the metrics module"
+    # get-cluster-status hides NS7 migration nodes: say why they get nothing.
+    for NID in $(jq -r '.nodes[] | select(.role == "ns7migration") | .node_id' <<<"$NODES_LIST"); do
+        log INFO "node $NID: NS7 migration node, nothing to update from NS8"
+    done
 
     # Checked on all nodes before any update, so the cluster never ends up
     # split across two minor releases.
