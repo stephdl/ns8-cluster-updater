@@ -270,6 +270,9 @@ The node OS comes from `cluster/list-nodes`, fed by the metrics module.
 If it's missing for a node, the script stops before any update. Check
 the metrics module then.
 
+A node being migrated from NS7 is not updated. The log says so, then the
+run goes on.
+
 A failed node does not stop the other steps. The run exits 1 at the end.
 
 ### Reboots
