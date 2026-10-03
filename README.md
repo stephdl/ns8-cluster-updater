@@ -38,8 +38,9 @@ systemctl daemon-reload
 systemctl enable --now ns8-cluster-updater.timer
 ```
 
-The timer runs `--all` Tuesday to Friday, at a random time between 00:00
-and 06:00 (stable per host). That's the same window as NS8's own updates.
+The timer runs `--all` once a week, on Monday at a random time between
+00:00 and 06:00 (stable per host). A failed run is retried the next Monday,
+or start it by hand.
 If the host was off, it starts at next boot, but `--os` usually stops
 there: the metrics module isn't up yet, so the node OS is unknown. Nothing
 is updated and the next timer run does the work.
@@ -196,8 +197,8 @@ nodes most likely do too. Check each with `dnf needs-restarting -r`.
 ### Other OS updates
 
 The script only runs what NS8 supports. For anything else, set it up on
-each node. Schedule it on a day this timer doesn't run (it runs Tuesday
-to Friday), so it never overlaps a core update.
+each node. Schedule it on a day this timer doesn't run (it runs on
+Monday), so it never overlaps a core update.
 
 - Rocky Linux with EPEL or other repos: a timer of your own running
   `dnf update -y --disablerepo='ns-*'`. Don't use `dnf-automatic`: it
