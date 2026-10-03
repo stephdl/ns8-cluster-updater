@@ -320,12 +320,15 @@ if [ "$DO_OS" = yes ]; then
 fi
 
 if [ "$DO_OS" = yes ]; then
-    while IFS=$'\t' read -r NID LOCAL HOSTNAME; do
+    while IFS=$'\t' read -r NID LOCAL; do
         OS_NAME=$(jq -r --arg id "$NID" '.[$id] // ""' <<<"$NODES_OS")
+        # get-cluster-status hostname is always nodeN.invalid, the real FQDN comes from metrics.
+        NODE_NAME=$(jq -r --argjson id "$NID" '.nodes[] | select(.node_id == $id) | .fqdn // empty' <<<"$NODES_LIST")
+        NODE_NAME=${NODE_NAME:-node$NID}
         case "$OS_NAME" in
             Rocky*) ;;
             *)
-                log WARN "OS update node $NID ($HOSTNAME, $OS_NAME): no NS8 repositories on this OS, update it locally, skipped"
+                log WARN "OS update node $NID ($NODE_NAME, $OS_NAME): no NS8 repositories on this OS, update it locally, skipped"
                 continue
                 ;;
         esac
@@ -341,7 +344,7 @@ if [ "$DO_OS" = yes ]; then
             fi
             log INFO "node $NID: Rocky Linux release still $RECHECK"
         fi
-        log STEP "OS update on node $NID ($HOSTNAME, $OS_NAME)"
+        log STEP "OS update on node $NID ($NODE_NAME, $OS_NAME)"
         log INFO "please wait, dnf output shows when node $NID is done (live: journalctl -f -u agent@node on node $NID)"
         # dnf output comes back in the task stderr: show it on success too.
         if OS_LOG=$(TASK_STDERR=always api_task_silent "node/$NID" update-os 2>&1 >/dev/null); then
@@ -358,7 +361,7 @@ if [ "$DO_OS" = yes ]; then
             LOCAL_UPDATED=yes
             local_reboot_needed && REBOOT_LOCAL=yes
         fi
-    done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local, .hostname] | @tsv')
+    done < <(echo "$STATUS" | jq -r '.nodes[] | [.id, .local] | @tsv')
 
     if [ "$LOCAL_UPDATED" != yes ]; then
         log INFO "this node got no OS update, reboot state not checked, check updated nodes with needs-restarting -r"
