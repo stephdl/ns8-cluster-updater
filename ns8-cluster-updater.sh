@@ -299,7 +299,7 @@ if [ "$DO_OS" = yes ]; then
 
     # Checked on all nodes before any update, so the cluster never ends up
     # split across two minor releases.
-    ROCKY_RELEASES=$(jq -r '[.nodes[] | select(.os_release.name | startswith("Rocky")) | .os_release.version] | unique | join(" ")' <<<"$NODES_LIST")
+    ROCKY_RELEASES=$(jq -r '[.nodes[] | select(.os_release.name // "" | startswith("Rocky")) | .os_release.version] | unique | join(" ")' <<<"$NODES_LIST")
     if [ "$OS_ALLOW_MINOR" = yes ]; then
         log INFO "minor release check skipped (--os-allow-minor)"
     elif [ -n "$ROCKY_RELEASES" ]; then
