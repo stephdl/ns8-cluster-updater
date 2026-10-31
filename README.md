@@ -365,3 +365,7 @@ flowchart TD
     done -- yes --> endfail([FAIL, exit 1])
     done -- no --> endok([OK, exit 0])
 ```
+
+## License
+
+GPL-3.0, see [LICENSE](LICENSE).
