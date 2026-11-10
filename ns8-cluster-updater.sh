@@ -178,16 +178,19 @@ sys.exit(response["exit_code"])
 }
 
 wait_cluster_ready() {
-    # update-core restarts the cluster agent on the leader, and it takes a
-    # few seconds to register again: until then tasks fail with
-    # 'Client "cluster" was not found'.
+    # Workaround: update-core restarts the leader's cluster agent, tasks fail until it registers again.
     local try out
     for try in $(seq 1 12); do
         if out=$(api_cli_silent get-cluster-status 2>&1); then
             [ "$try" -gt 1 ] && echo "cluster agent ready after $try attempts"
+            echo "$out"
             return 0
         fi
-        sleep 10
+        case "$out" in
+            *TaskSubmissionCheckFailed*) ;;
+            *) break ;;
+        esac
+        [ "$try" -lt 12 ] && sleep 10
     done
     echo "$out"
     return 1
