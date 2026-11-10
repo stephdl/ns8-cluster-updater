@@ -235,6 +235,11 @@ with the same repository view as the update actions, and skips the call
 when nothing is pending. A failed check is an error, never "nothing
 pending".
 
+The restart also takes the leader's cluster agent offline for a moment.
+After `update-core`, the script retries `get-cluster-status` up to 12
+times, 10 seconds apart, while the agent is not registered yet. Any
+other error stops the run at once.
+
 Tasks are sent with `extra.isNotificationHidden`, so they don't pop up in
 every admin's UI. Failures still show. `api-cli` can't set that flag, so
 the script calls the `agent.tasks` Python API directly.
@@ -354,7 +359,7 @@ flowchart TD
     reboot --> wantcore
     wantos -- no --> wantcore{--core and a newer core?}
 
-    wantcore -- yes --> core["update-core on all nodes,<br>check cluster status"]
+    wantcore -- yes --> core["update-core on all nodes,<br>wait for cluster status,<br>12 tries 10 s apart"]
     core -- fails --> fatal
     core -- ok --> wantmod
     wantcore -- no --> wantmod{--modules and pending app updates?}

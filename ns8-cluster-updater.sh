@@ -177,6 +177,25 @@ sys.exit(response["exit_code"])
 ' "$agent_id" "$action" "$data"
 }
 
+wait_cluster_ready() {
+    # Workaround: update-core restarts the leader's cluster agent, tasks fail until it registers again.
+    local try out
+    for try in $(seq 1 12); do
+        if out=$(api_cli_silent get-cluster-status 2>&1); then
+            [ "$try" -gt 1 ] && echo "cluster agent ready after $try attempts"
+            echo "$out"
+            return 0
+        fi
+        case "$out" in
+            *TaskSubmissionCheckFailed*) ;;
+            *) break ;;
+        esac
+        [ "$try" -lt 12 ] && sleep 10
+    done
+    echo "$out"
+    return 1
+}
+
 managed_view_read() {
     # Update actions without a task user read the "managed" view, not
     # "latest": check the same view they will apply.
@@ -393,7 +412,7 @@ if [ "$DO_CORE" = yes ]; then
         log INFO "updating core on nodes: $NODE_IDS"
         run_step "update-core" api_cli_silent update-core "{\"nodes\":$NODE_IDS}" \
             || die "core update failed"
-        run_step "verify cluster status after core update" api_cli_silent get-cluster-status \
+        run_step "verify cluster status after core update" wait_cluster_ready \
             || die "cluster not responsive after core update"
         CORE_AFTER=$(snapshot_core_modules) || die "failed to fetch core modules status after update"
         log_version_diff "core components" "$CORE_BEFORE" "$CORE_AFTER"
